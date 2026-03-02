@@ -65,6 +65,8 @@ let testing: TestingExports;
 beforeAll(async () => {
   process.env.NODE_ENV = "test";
   process.env.STARKZAP_MCP_ENABLE_TEST_HOOKS = "1";
+  process.env.STARKZAP_MCP_TEST_KEY_MARKER =
+    "TEST_KEY_DO_NOT_USE_IN_PRODUCTION";
   process.env.STARKNET_PRIVATE_KEY = `0x${"1".padStart(64, "0")}`;
   process.env.STARKNET_STAKING_CONTRACT =
     "0x03745ab04a431fc02871a139be6b93d9260b0ff3e779ad9c8b377183b23109f1";
@@ -140,6 +142,11 @@ describe("index integration hardening", () => {
     expect(sdkConfig.paymaster?.headers?.["x-paymaster-api-key"]).toBe(
       "test-avnu-key"
     );
+  });
+
+  it("scrubs sensitive env vars from process.env after startup parse", () => {
+    expect(process.env.STARKNET_PRIVATE_KEY).toBeUndefined();
+    expect(process.env.AVNU_PAYMASTER_API_KEY).toBeUndefined();
   });
 
   it("times out hanging RPC promises", async () => {
@@ -415,6 +422,50 @@ describe("index integration hardening", () => {
     expect(response.content[0]?.text).toContain("commissionPercent");
   });
 
+  it("rejects unreasonable unpoolTime values in pool position responses", async () => {
+    testing.setWalletSingleton({
+      getPoolPosition: vi.fn().mockResolvedValue({
+        staked: Amount.parse("1", TEST_TOKEN),
+        rewards: Amount.parse("0", TEST_TOKEN),
+        total: Amount.parse("1", TEST_TOKEN),
+        unpooling: Amount.parse("0", TEST_TOKEN),
+        commissionPercent: 5,
+        unpoolTime: new Date("2999-01-01T00:00:00.000Z"),
+      }),
+    } as unknown as Wallet);
+    const response = await testing.handleCallToolRequest({
+      params: {
+        name: "starkzap_get_pool_position",
+        arguments: { pool: "0x1" },
+      },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content[0]?.text).toContain("unpoolTime");
+  });
+
+  it("rejects pool position responses with inconsistent total", async () => {
+    testing.setWalletSingleton({
+      getPoolPosition: vi.fn().mockResolvedValue({
+        staked: Amount.parse("1", TEST_TOKEN),
+        rewards: Amount.parse("0.1", TEST_TOKEN),
+        total: Amount.parse("1.2", TEST_TOKEN),
+        unpooling: Amount.parse("0", TEST_TOKEN),
+        commissionPercent: 5,
+        unpoolTime: null,
+      }),
+    } as unknown as Wallet);
+    const response = await testing.handleCallToolRequest({
+      params: {
+        name: "starkzap_get_pool_position",
+        arguments: { pool: "0x1" },
+      },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content[0]?.text).toContain("total does not match");
+  });
+
   it("keeps pool position responses deterministic by omitting wall-clock fields", async () => {
     const unpoolTime = new Date("2026-02-27T12:00:00.000Z");
     testing.setWalletSingleton({
@@ -498,14 +549,18 @@ describe("index integration hardening", () => {
     ];
     let idx = 0;
     const mockWallet = {
-      getPoolPosition: vi.fn(async () => ({
-        staked: Amount.parse("1", TEST_TOKEN),
-        rewards: rewards[Math.min(idx++, rewards.length - 1)],
-        total: Amount.parse("1", TEST_TOKEN),
-        unpooling: Amount.parse("0", TEST_TOKEN),
-        commissionPercent: 0,
-        unpoolTime: null,
-      })),
+      getPoolPosition: vi.fn(async () => {
+        const currentReward = rewards[Math.min(idx++, rewards.length - 1)];
+        const staked = Amount.parse("1", TEST_TOKEN);
+        return {
+          staked,
+          rewards: currentReward,
+          total: staked.add(currentReward),
+          unpooling: Amount.parse("0", TEST_TOKEN),
+          commissionPercent: 0,
+          unpoolTime: null,
+        };
+      }),
     };
 
     await expect(

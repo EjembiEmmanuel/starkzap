@@ -598,6 +598,7 @@ function assertPoolPositionShape(
   commissionPercent: number;
   unpoolTime?: Date | null;
 } {
+  const MAX_UNPOOL_TIME_FUTURE_MS = 365 * 24 * 60 * 60 * 1000; // 1 year safety bound
   if (!isRecord(position)) {
     throw new Error(
       `Invalid pool position response from SDK for ${poolAddress}: expected object.`
@@ -607,6 +608,7 @@ function assertPoolPositionShape(
   assertAmountMethods(position.staked, "pool position staked", [
     "toUnit",
     "toFormatted",
+    "add",
   ]);
   assertAmountMethods(position.rewards, "pool position rewards", [
     "toUnit",
@@ -619,6 +621,7 @@ function assertPoolPositionShape(
   assertAmountMethods(position.total, "pool position total", [
     "toUnit",
     "toFormatted",
+    "eq",
   ]);
   assertAmountMethods(position.unpooling, "pool position unpooling", [
     "toUnit",
@@ -638,6 +641,17 @@ function assertPoolPositionShape(
       `Invalid pool position response from SDK for ${poolAddress}: unpoolTime must be a valid Date or null.`
     );
   }
+  if (position.unpoolTime instanceof Date) {
+    const unpoolEpochMs = position.unpoolTime.getTime();
+    if (
+      unpoolEpochMs < 0 ||
+      unpoolEpochMs > nowMs() + MAX_UNPOOL_TIME_FUTURE_MS
+    ) {
+      throw new Error(
+        `Invalid pool position response from SDK for ${poolAddress}: unpoolTime is outside accepted bounds.`
+      );
+    }
+  }
 
   if (
     typeof position.commissionPercent !== "number" ||
@@ -647,6 +661,13 @@ function assertPoolPositionShape(
   ) {
     throw new Error(
       `Invalid pool position response from SDK for ${poolAddress}: commissionPercent must be a finite number between 0 and 100.`
+    );
+  }
+
+  const expectedTotal = position.staked.add(position.rewards);
+  if (!position.total.eq(expectedTotal)) {
+    throw new Error(
+      `Invalid pool position response from SDK for ${poolAddress}: total does not match staked + rewards.`
     );
   }
 }
@@ -980,6 +1001,8 @@ async function assertStableExitAmountWithinCap(
   poolToken: Token,
   maxCap: string
 ): Promise<void> {
+  // This is a best-effort cap check tied to the position snapshot observed before
+  // submission. The chain state can still move between final read and inclusion.
   const readPosition = async (stage: string) => {
     const position = await withTimeout(stage, () =>
       wallet.getPoolPosition(poolAddress)
@@ -1572,6 +1595,7 @@ async function handleTool(
         hash: txResult.hash,
         explorerUrl: txResult.explorerUrl,
         pool: poolAddress,
+        note: "Preflight cap check validated observed unpooling + rewards snapshot before submission. Final realized withdrawal can differ if chain state changes before inclusion.",
       });
     }
 
@@ -1829,13 +1853,9 @@ const unsafeTestHooksAcknowledged =
   "I_UNDERSTAND_THIS_EXPOSES_WALLET_MUTATION";
 const unsafeHooksAllowedOnMainnet =
   process.env.STARKZAP_MCP_ALLOW_UNSAFE_TEST_HOOKS_MAINNET === "1";
-const testHookPrivateKeyIsSafe = (() => {
-  try {
-    return BigInt(env.STARKNET_PRIVATE_KEY) <= 1024n;
-  } catch {
-    return false;
-  }
-})();
+const testHookMarkerAcknowledged =
+  process.env.STARKZAP_MCP_TEST_KEY_MARKER ===
+  "TEST_KEY_DO_NOT_USE_IN_PRODUCTION";
 if (process.env.NODE_ENV === "test" && !testHooksEnabled) {
   console.error(
     "[starkzap-mcp] NODE_ENV=test detected, but test hooks are disabled. Set STARKZAP_MCP_ENABLE_TEST_HOOKS=1 to enable hooks."
@@ -1854,9 +1874,9 @@ if (testHooksEnabled) {
     unsafeBypassEnabled &&
     hasProductionLikeIndicators &&
     !unsafeHooksAllowedOnMainnet;
-  if (!testHookPrivateKeyIsSafe && !unsafeBypassEnabled) {
+  if (!testHookMarkerAcknowledged && !unsafeBypassEnabled) {
     console.error(
-      "[starkzap-mcp] refusing to expose test hooks: STARKNET_PRIVATE_KEY does not look like a test key. To bypass in controlled environments only, set STARKZAP_MCP_ALLOW_UNSAFE_TEST_HOOKS=1 and STARKZAP_MCP_UNSAFE_TEST_HOOKS_ACK=I_UNDERSTAND_THIS_EXPOSES_WALLET_MUTATION."
+      "[starkzap-mcp] refusing to expose test hooks: missing STARKZAP_MCP_TEST_KEY_MARKER=TEST_KEY_DO_NOT_USE_IN_PRODUCTION. To bypass in controlled environments only, set STARKZAP_MCP_ALLOW_UNSAFE_TEST_HOOKS=1 and STARKZAP_MCP_UNSAFE_TEST_HOOKS_ACK=I_UNDERSTAND_THIS_EXPOSES_WALLET_MUTATION."
     );
   } else if (blocksUnsafeBypassForEnvironment) {
     console.error(

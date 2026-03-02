@@ -30,7 +30,7 @@ STARKNET_PRIVATE_KEY=0x... STARKNET_STAKING_CONTRACT=0x... node dist/index.js --
 This server handles real funds. The following protections are built in:
 
 1. **All state-changing tools are disabled by default.** Read-only tools are available without write flags. Write tools (`starkzap_transfer`, staking, `starkzap_deploy_account`) require `--enable-write`. The unrestricted `starkzap_execute` tool requires its own `--enable-execute` flag.
-2. **Amount caps are enforced for both single ops and transfer batches.** All amount-bearing operations (transfers and staking) are bounded by `--max-amount` (default: 1000 tokens). Transfer batches are also bounded by `--max-batch-amount` (default: same as `--max-amount`). For state-dependent staking exits/claims, caps use multi-check preflight validation and remain best-effort with a residual chain-state race window between final check and inclusion (typically 1-3 Starknet blocks). `starkzap_exit_pool` preflight validates against the current observed `unpooling + rewards` state and cannot provide strict on-chain cap enforcement if that state changes before inclusion. Keep `--max-amount` conservative and reconcile tx hashes before retrying.
+2. **Amount caps are enforced for both single ops and transfer batches.** All amount-bearing operations (transfers and staking) are bounded by `--max-amount` (default: 1000 tokens). Transfer batches are also bounded by `--max-batch-amount` (default: same as `--max-amount`). For state-dependent staking exits/claims, caps use multi-check preflight validation and remain best-effort with a residual chain-state race window between final check and inclusion (typically 1-3 Starknet blocks). `starkzap_exit_pool` calls `wallet.exitPool(pool)` from StarkZap SDK and preflight-validates against the latest observed `unpooling + rewards` snapshot. The final realized withdrawal is pool/contract-defined at inclusion time and can differ if rewards/state change between final check and inclusion. Keep `--max-amount` conservative and reconcile tx hashes before retrying.
 3. **Batch size limits.** Maximum 20 transfers per batch, 10 calls per execute batch.
 4. **Address validation.** All addresses are validated against Starknet felt252 format before use.
 5. **Runtime argument validation.** Every tool's arguments are validated with zod schemas before execution. Malformed inputs are rejected with clear error messages.
@@ -147,7 +147,9 @@ const mcpServer = new McpServerStdio({
 | `starkzap_claim_rewards`     | Claim accumulated staking rewards                                     |
 | `starkzap_exit_pool_intent`  | Start exit process (tokens stop earning, pool token is chain-derived) |
 | `starkzap_exit_pool`         | Complete exit after waiting period                                    |
-| `starkzap_get_pool_position` | Query staking position, rewards, commission                           |
+| `starkzap_get_pool_position` | Query staking position snapshot (staked/rewards/commission/unpooling) |
+
+`starkzap_get_pool_position` is a point-in-time chain snapshot and should be treated as non-cacheable for execution decisions.
 
 ## Tool Examples
 
