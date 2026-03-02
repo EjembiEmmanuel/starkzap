@@ -111,7 +111,11 @@ function isSecureRpcUrl(rawUrl: string): boolean {
       return true;
     }
     if (url.protocol === "http:") {
-      const hostname = url.hostname.toLowerCase();
+      const rawHostname = url.hostname.toLowerCase();
+      const hostname =
+        rawHostname.startsWith("[") && rawHostname.endsWith("]")
+          ? rawHostname.slice(1, -1)
+          : rawHostname;
       return (
         hostname === "localhost" ||
         hostname === "127.0.0.1" ||
@@ -358,6 +362,17 @@ function summarizeError(error: unknown): string {
 
 function createErrorReference(message: string): string {
   return createHash("sha256").update(message).digest("hex").slice(0, 16);
+}
+
+function containsSensitiveConnectionHints(value: string): boolean {
+  const patterns = [
+    /https?:\/\/[^\s)]+/i,
+    /\[[\da-fA-F:]+\](?::\d{2,5})?/i,
+    /\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{2,5})?\b/,
+    /\b(?:localhost|::1)(?::\d{2,5})?\b/i,
+    /(?<![\\/])\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d{2,5})?\b/i,
+  ] as const;
+  return patterns.some((pattern) => pattern.test(value));
 }
 
 function sanitizeExplorerUrl(rawUrl: string | undefined): string | undefined {
@@ -825,9 +840,11 @@ async function resolvePoolTokenForOperation(
       wallet.staking(poolAddress)
     );
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    console.error(
+      `[starkzap-mcp:staking] metadata lookup failed for ${poolAddress}: ${summarizeError(error)}`
+    );
     throw new Error(
-      `Could not resolve staking pool metadata for ${poolAddress}. ${reason}`
+      `Could not resolve staking pool metadata for ${poolAddress}. Verify staking contract and pool address configuration.`
     );
   }
   assertStakingPoolShape(staking, poolAddress);
@@ -1182,6 +1199,7 @@ async function maybeResetWalletOnRpcError(error: unknown): Promise<void> {
 
 function buildToolErrorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
+  const normalizedMessage = message.replace(/\s+/g, " ").trim();
   const requestId = createErrorReference(message);
   console.error(`[starkzap-mcp:error][${requestId}] ${summarizeError(error)}`);
   const safeMessagePrefixes = [
@@ -1197,11 +1215,16 @@ function buildToolErrorText(error: unknown): string {
     "Address ",
     "starkzap_",
   ];
-  const safeMessage = safeMessagePrefixes.some((prefix) =>
-    message.startsWith(prefix)
-  )
-    ? message
-    : `Operation failed. Reference: ${requestId}`;
+  const hasSafePrefix = safeMessagePrefixes.some((prefix) =>
+    normalizedMessage.startsWith(prefix)
+  );
+  const exceedsSafeLength = normalizedMessage.length > 512;
+  const safeMessage =
+    hasSafePrefix &&
+    !containsSensitiveConnectionHints(normalizedMessage) &&
+    !exceedsSafeLength
+      ? normalizedMessage
+      : `Operation failed. Reference: ${requestId}`;
   return `Error: ${safeMessage}`;
 }
 
@@ -1728,6 +1751,7 @@ interface TestingHooks {
     maxCap: string
   ): Promise<void>;
   buildToolErrorText(error: unknown): string;
+  isSecureRpcUrl(rawUrl: string): boolean;
   isRpcLikeError(error: unknown): boolean;
   maybeResetWalletOnRpcError(error: unknown): Promise<void>;
   cleanupWalletAndSdkResources(): Promise<void>;
@@ -1750,6 +1774,7 @@ const testingHooks: TestingHooks = {
   assertStablePoolAmountWithinCap,
   assertStableExitAmountWithinCap,
   buildToolErrorText,
+  isSecureRpcUrl,
   isRpcLikeError,
   maybeResetWalletOnRpcError,
   cleanupWalletAndSdkResources,

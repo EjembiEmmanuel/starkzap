@@ -44,6 +44,7 @@ type TestingExports = {
     maxCap: string
   ): Promise<void>;
   buildToolErrorText(error: unknown): string;
+  isSecureRpcUrl(rawUrl: string): boolean;
   isRpcLikeError(error: unknown): boolean;
   handleCallToolRequest(request: {
     params: { name: string; arguments?: Record<string, unknown> | undefined };
@@ -188,6 +189,27 @@ describe("index integration hardening", () => {
     );
     expect(ipv6Host).toContain("Operation failed. Reference:");
     expect(ipv6Host).not.toContain("2001:db8::1");
+
+    const allowlistedWithUrl = testing.buildToolErrorText(
+      new Error(
+        "Could not resolve staking pool metadata for 0x1. upstream said https://user:pass@internal.rpc.local:8545"
+      )
+    );
+    expect(allowlistedWithUrl).toContain("Operation failed. Reference:");
+    expect(allowlistedWithUrl).not.toContain("internal.rpc.local");
+    expect(allowlistedWithUrl).not.toContain("user:pass");
+
+    const overlyLongAllowlisted = testing.buildToolErrorText(
+      new Error(`Could not resolve staking pool metadata ${"x".repeat(600)}`)
+    );
+    expect(overlyLongAllowlisted).toContain("Operation failed. Reference:");
+  });
+
+  it("accepts http loopback URLs including bracketed IPv6 localhost", () => {
+    expect(testing.isSecureRpcUrl("http://localhost:5050")).toBe(true);
+    expect(testing.isSecureRpcUrl("http://127.0.0.1:5050")).toBe(true);
+    expect(testing.isSecureRpcUrl("http://[::1]:5050")).toBe(true);
+    expect(testing.isSecureRpcUrl("http://[2001:db8::1]:5050")).toBe(false);
   });
 
   it("classifies structured RPC transport errors and excludes tx wait timeouts", () => {
