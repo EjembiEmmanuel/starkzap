@@ -33,6 +33,9 @@ export * from "@/swap";
 // Bridge
 export * from "@/bridge";
 
+// Connect
+export * from "@/connect";
+
 // Types
 export * from "@/types";
 
