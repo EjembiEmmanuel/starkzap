@@ -2,6 +2,7 @@ import type { WalletInterface } from "@/wallet/interface";
 import {
   type Address,
   Amount,
+  BridgeToken,
   type ChainId,
   type DeployOptions,
   type EnsureReadyOptions,
@@ -28,6 +29,8 @@ import { Staking } from "@/staking";
 import type { SwapInput, SwapQuote, SwapProvider } from "@/swap";
 import { AvnuSwapProvider } from "@/swap";
 import { resolveSwapInput } from "@/swap/utils";
+import { BridgeOperator } from "@/bridge";
+import type { ConnectedExternalWallet } from "..";
 
 const MAX_ERC20_CACHE_SIZE = 128;
 const MAX_STAKING_CACHE_SIZE = 128;
@@ -76,6 +79,8 @@ export abstract class BaseWallet implements WalletInterface {
    */
   private stakingMap: Map<Address, Staking> = new Map();
   private stakingInFlight: Map<Address, Promise<Staking>> = new Map();
+
+  private readonly bridging = new BridgeOperator(this);
 
   /**
    * Creates a new BaseWallet instance.
@@ -713,5 +718,23 @@ export abstract class BaseWallet implements WalletInterface {
     this.stakingInFlight.delete(poolAddress);
 
     return staking;
+  }
+
+  // ============================================================
+  // Bridging delegated methods
+  // ============================================================
+
+  getDepositBalance<T extends BridgeToken>(
+    token: T,
+    externalWallet: ConnectedExternalWallet<T>
+  ): Promise<Amount> {
+    return this.bridging.getDepositBalance(token, externalWallet);
+  }
+
+  getAllowance<T extends BridgeToken>(
+    token: T,
+    externalWallet: ConnectedExternalWallet<T>
+  ): Promise<Amount | null> {
+    return this.bridging.getAllowance(token, externalWallet);
   }
 }
