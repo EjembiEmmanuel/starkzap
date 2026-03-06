@@ -166,8 +166,6 @@ export class Erc20 {
    * console.log(balance.toFormatted()); // "100.5 USDC"
    * ```
    */
-  public async balanceOf(wallet: WalletInterface): Promise<Amount>;
-  public async balanceOf(address: BigNumberish): Promise<Amount>;
   public async balanceOf(
     walletOrAddress: WalletInterface | BigNumberish
   ): Promise<Amount> {

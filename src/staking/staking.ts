@@ -231,8 +231,6 @@ export class Staking {
    * }
    * ```
    */
-  async getPosition(wallet: WalletInterface): Promise<PoolMember | null>;
-  async getPosition(address: BigNumberish): Promise<PoolMember | null>;
   async getPosition(
     walletOrAddress: WalletInterface | BigNumberish
   ): Promise<PoolMember | null> {
