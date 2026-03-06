@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { Staking } from "@/staking";
 import { fromAddress, type Address, type Token } from "@/types";
 import type { WalletInterface } from "@/wallet/interface";
-import type { BigNumberish } from "starknet";
 
 const mockToken: Token = {
   name: "Starknet Token",
@@ -25,21 +24,6 @@ describe("Staking.getPosition", () => {
     const stakingLike = {
       pool: { get_pool_member_info_v1: getPoolMemberInfo },
       token: mockToken,
-      resolveWalletAddress: (
-        walletOrAddress: WalletInterface | BigNumberish
-      ): Address => {
-        if (
-          walletOrAddress &&
-          typeof walletOrAddress === "object" &&
-          "address" in walletOrAddress
-        ) {
-          return fromAddress(
-            (walletOrAddress as { address: BigNumberish }).address
-          );
-        }
-
-        return fromAddress(walletOrAddress);
-      },
     } as unknown as Staking;
 
     const position = await Staking.prototype.getPosition.call(
@@ -72,21 +56,6 @@ describe("Staking.getPosition", () => {
     const stakingLike = {
       pool: { get_pool_member_info_v1: getPoolMemberInfo },
       token: mockToken,
-      resolveWalletAddress: (
-        walletOrAddress: WalletInterface | BigNumberish
-      ): Address => {
-        if (
-          walletOrAddress &&
-          typeof walletOrAddress === "object" &&
-          "address" in walletOrAddress
-        ) {
-          return fromAddress(
-            (walletOrAddress as { address: BigNumberish }).address
-          );
-        }
-
-        return fromAddress(walletOrAddress);
-      },
     } as unknown as Staking;
 
     const position = await Staking.prototype.getPosition.call(
@@ -114,21 +83,6 @@ describe("Staking.getPosition", () => {
     const stakingLike = {
       pool: { get_pool_member_info_v1: getPoolMemberInfo },
       token: mockToken,
-      resolveWalletAddress: (
-        walletOrAddress: WalletInterface | BigNumberish
-      ): Address => {
-        if (
-          walletOrAddress &&
-          typeof walletOrAddress === "object" &&
-          "address" in walletOrAddress
-        ) {
-          return fromAddress(
-            (walletOrAddress as { address: BigNumberish }).address
-          );
-        }
-
-        return fromAddress(walletOrAddress);
-      },
     } as unknown as Staking;
 
     const position = await Staking.prototype.getPosition.call(

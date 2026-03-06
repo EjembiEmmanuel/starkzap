@@ -2,7 +2,7 @@ import {
   type Address,
   Amount,
   type ExecuteOptions,
-  fromAddress,
+  resolveWalletAddress,
   type Token,
 } from "@/types";
 import type { WalletInterface } from "@/wallet";
@@ -136,22 +136,6 @@ export class Erc20 {
     return await from.execute(calls, options);
   }
 
-  private resolveWalletAddress(
-    walletOrAddress: WalletInterface | BigNumberish
-  ): Address {
-    if (
-      walletOrAddress &&
-      typeof walletOrAddress === "object" &&
-      "address" in walletOrAddress
-    ) {
-      return fromAddress(
-        (walletOrAddress as { address: BigNumberish }).address
-      );
-    }
-
-    return fromAddress(walletOrAddress);
-  }
-
   /**
    * Get the balance in a wallet.
    * @param walletOrAddress - Wallet (or address value) to check the balance of
@@ -169,7 +153,7 @@ export class Erc20 {
   public async balanceOf(
     walletOrAddress: WalletInterface | Address | BigNumberish
   ): Promise<Amount> {
-    const walletAddress = this.resolveWalletAddress(walletOrAddress);
+    const walletAddress = resolveWalletAddress(walletOrAddress);
     let result: number | bigint | Uint256;
     try {
       result = await this.contract.balance_of(walletAddress);

@@ -12,6 +12,7 @@ import {
   Amount,
   type ExecuteOptions,
   fromAddress,
+  resolveWalletAddress,
   type StakingConfig,
   type Token,
 } from "@/types";
@@ -194,22 +195,6 @@ export class Staking {
     return member.isSome();
   }
 
-  private resolveWalletAddress(
-    walletOrAddress: WalletInterface | BigNumberish
-  ): Address {
-    if (
-      walletOrAddress &&
-      typeof walletOrAddress === "object" &&
-      "address" in walletOrAddress
-    ) {
-      return fromAddress(
-        (walletOrAddress as { address: BigNumberish }).address
-      );
-    }
-
-    return fromAddress(walletOrAddress);
-  }
-
   /**
    * Get the current staking position for a wallet in this pool.
    *
@@ -234,7 +219,7 @@ export class Staking {
   async getPosition(
     walletOrAddress: WalletInterface | Address | BigNumberish
   ): Promise<PoolMember | null> {
-    const walletAddress = this.resolveWalletAddress(walletOrAddress);
+    const walletAddress = resolveWalletAddress(walletOrAddress);
     const memberInfo = await this.pool.get_pool_member_info_v1(walletAddress);
 
     if (memberInfo.isNone()) {
