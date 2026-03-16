@@ -1,4 +1,4 @@
-import { type Call, Contract, uint256 } from "starknet";
+import { CallData, type Call, uint256 } from "starknet";
 import type { WalletInterface } from "@/wallet/interface";
 import type { Amount, ExecuteOptions } from "@/types";
 import type { Tx } from "@/tx";
@@ -7,7 +7,6 @@ import {
   getSupportedAssetSymbols,
   type EndurLstConfig,
 } from "@/endur/presets";
-import { LST_ABI } from "@/endur/abi/lst";
 
 export interface EndurLstStatsItem {
   asset: string;
@@ -74,6 +73,46 @@ export class Endur {
     return this.apiBaseUrl.trim().replace(/\/$/, "");
   }
 
+  private parseLstStats(raw: unknown): EndurLstStatsItem[] {
+    if (!Array.isArray(raw)) {
+      throw new Error(
+        `Endur LST stats API returned unexpected shape: expected array, got ${typeof raw}. Raw payload: ${JSON.stringify(raw).slice(0, 500)}${JSON.stringify(raw).length > 500 ? "..." : ""}`
+      );
+    }
+    const valid: EndurLstStatsItem[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      const item = raw[i];
+      if (item === null || typeof item !== "object") {
+        throw new Error(
+          `Endur LST stats API item at index ${i} is not an object. Raw item: ${JSON.stringify(item)}`
+        );
+      }
+      const obj = item as Record<string, unknown>;
+      const asset = obj.asset;
+      const apy = obj.apy;
+      const apyInPercentage = obj.apyInPercentage;
+      const tvlUsd = obj.tvlUsd;
+      const tvlAsset = obj.tvlAsset;
+      if (
+        typeof asset !== "string" ||
+        typeof apy !== "number" ||
+        typeof apyInPercentage !== "string" ||
+        typeof tvlUsd !== "number" ||
+        typeof tvlAsset !== "number"
+      ) {
+        continue;
+      }
+      valid.push({
+        asset,
+        apy,
+        apyInPercentage,
+        tvlUsd,
+        tvlAsset,
+      });
+    }
+    return valid;
+  }
+
   async getAPY(asset?: string): Promise<EndurAPYResult> {
     const base = this.assertApiBaseUrl();
     const lstRes = await this.fetcher(`${base}/api/lst/stats`);
@@ -82,15 +121,20 @@ export class Endur {
         `Endur LST stats API failed: ${lstRes.status} ${lstRes.statusText}`
       );
     }
-    const lsts: EndurLstStatsItem[] = await lstRes.json();
+    const raw = await lstRes.json();
+    const lsts = this.parseLstStats(raw);
     const result: EndurAPYResult = {};
 
     for (const item of lsts) {
-      if (!asset || item.asset?.toLowerCase() === asset.toLowerCase()) {
-        result[item.asset] = {
-          apy: item.apy,
-          apyInPercentage: item.apyInPercentage,
-        };
+      const itemAsset = item.asset;
+      if (!itemAsset) continue;
+      if (!asset || itemAsset.toLowerCase() === asset.toLowerCase()) {
+        const apy = typeof item.apy === "number" ? item.apy : 0;
+        const apyInPercentage =
+          typeof item.apyInPercentage === "string"
+            ? item.apyInPercentage
+            : String(apy * 100);
+        result[itemAsset] = { apy, apyInPercentage };
         if (asset) break;
       }
     }
@@ -105,16 +149,18 @@ export class Endur {
         `Endur LST stats API failed: ${lstRes.status} ${lstRes.statusText}`
       );
     }
-    const lsts: EndurLstStatsItem[] = await lstRes.json();
+    const raw = await lstRes.json();
+    const lsts = this.parseLstStats(raw);
+
     const mapToTvlItem = (item: EndurLstStatsItem): EndurTVLItem => ({
-      asset: item.asset,
-      tvlUsd: item.tvlUsd,
-      tvlAsset: item.tvlAsset,
+      asset: item.asset ?? "",
+      tvlUsd: typeof item.tvlUsd === "number" ? item.tvlUsd : 0,
+      tvlAsset: typeof item.tvlAsset === "number" ? item.tvlAsset : 0,
     });
 
     if (asset) {
       const match = lsts.find(
-        (item) => item.asset?.toLowerCase() === asset.toLowerCase()
+        (i) => i.asset?.toLowerCase() === asset.toLowerCase()
       );
       return match ? [mapToTvlItem(match)] : [];
     }
@@ -148,15 +194,14 @@ export class Endur {
       .erc20(token)
       .populateApprove(config.lstAddress, params.amount);
 
-    // Contract used only for populate() (calldata); not attached to provider for reads.
-    const lstContract = new Contract({
-      abi: LST_ABI,
-      address: config.lstAddress,
-    });
-    const depositCall = lstContract.populate("deposit", [
-      uint256.bnToUint256(params.amount.toBase()),
-      this.wallet.address,
-    ]) as Call;
+    const depositCall: Call = {
+      contractAddress: config.lstAddress,
+      entrypoint: "deposit",
+      calldata: CallData.compile([
+        uint256.bnToUint256(params.amount.toBase()),
+        this.wallet.address,
+      ]),
+    };
 
     return this.wallet.execute([approveCall, depositCall], options);
   }
@@ -176,16 +221,15 @@ export class Endur {
       );
     }
 
-    // Contract used only for populate() (calldata); not attached to provider for reads.
-    const lstContract = new Contract({
-      abi: LST_ABI,
-      address: config.lstAddress,
-    });
-    const redeemCall = lstContract.populate("redeem", [
-      uint256.bnToUint256(params.amount.toBase()),
-      this.wallet.address,
-      this.wallet.address,
-    ]) as Call;
+    const redeemCall: Call = {
+      contractAddress: config.lstAddress,
+      entrypoint: "redeem",
+      calldata: CallData.compile([
+        uint256.bnToUint256(params.amount.toBase()),
+        this.wallet.address,
+        this.wallet.address,
+      ]),
+    };
 
     return this.wallet.execute([redeemCall], options);
   }
