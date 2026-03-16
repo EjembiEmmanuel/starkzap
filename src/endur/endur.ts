@@ -1,4 +1,4 @@
-import { CallData, type Call, uint256 } from "starknet";
+import { byteArray, CallData, type Call, uint256 } from "starknet";
 import type { WalletInterface } from "@/wallet/interface";
 import type { Amount, ExecuteOptions } from "@/types";
 import type { Tx } from "@/tx";
@@ -73,6 +73,18 @@ export class Endur {
     return this.apiBaseUrl.trim().replace(/\/$/, "");
   }
 
+  private async fetchLstStats(): Promise<EndurLstStatsItem[]> {
+    const base = this.assertApiBaseUrl();
+    const lstRes = await this.fetcher(`${base}/api/lst/stats`);
+    if (!lstRes.ok) {
+      throw new Error(
+        `Endur LST stats API failed: ${lstRes.status} ${lstRes.statusText}`
+      );
+    }
+    const raw = await lstRes.json();
+    return this.parseLstStats(raw);
+  }
+
   private parseLstStats(raw: unknown): EndurLstStatsItem[] {
     if (!Array.isArray(raw)) {
       throw new Error(
@@ -113,16 +125,18 @@ export class Endur {
     return valid;
   }
 
+  private filterSupportedByChain(
+    items: EndurLstStatsItem[]
+  ): EndurLstStatsItem[] {
+    const chainId = this.wallet.getChainId();
+    const supported = new Set(
+      getSupportedAssetSymbols(chainId).map((s) => s.toLowerCase())
+    );
+    return items.filter((i) => supported.has(i.asset.toLowerCase()));
+  }
+
   async getAPY(asset?: string): Promise<EndurAPYResult> {
-    const base = this.assertApiBaseUrl();
-    const lstRes = await this.fetcher(`${base}/api/lst/stats`);
-    if (!lstRes.ok) {
-      throw new Error(
-        `Endur LST stats API failed: ${lstRes.status} ${lstRes.statusText}`
-      );
-    }
-    const raw = await lstRes.json();
-    const lsts = this.parseLstStats(raw);
+    const lsts = this.filterSupportedByChain(await this.fetchLstStats());
     const result: EndurAPYResult = {};
 
     for (const item of lsts) {
@@ -142,16 +156,7 @@ export class Endur {
   }
 
   async getTVL(asset?: string): Promise<EndurTVLResult> {
-    const base = this.assertApiBaseUrl();
-    const lstRes = await this.fetcher(`${base}/api/lst/stats`);
-    if (!lstRes.ok) {
-      throw new Error(
-        `Endur LST stats API failed: ${lstRes.status} ${lstRes.statusText}`
-      );
-    }
-    const raw = await lstRes.json();
-    const lsts = this.parseLstStats(raw);
-
+    const lsts = this.filterSupportedByChain(await this.fetchLstStats());
     const mapToTvlItem = (item: EndurLstStatsItem): EndurTVLItem => ({
       asset: item.asset ?? "",
       tvlUsd: typeof item.tvlUsd === "number" ? item.tvlUsd : 0,
@@ -204,6 +209,59 @@ export class Endur {
     };
 
     return this.wallet.execute([approveCall, depositCall], options);
+  }
+
+  /**
+   * Deposit assets into the LST with a referral code. Same as deposit() but routes
+   * rewards to the referrer for the given referral code.
+   *
+   * @param params.asset - Asset symbol (e.g. "STRK", "WBTC")
+   * @param params.amount - Amount to deposit
+   * @param params.referralCode - Referral code string (e.g. "ABC123")
+   */
+  async depositWithReferral(
+    params: {
+      asset: string;
+      amount: Amount;
+      referralCode: string;
+    },
+    options?: ExecuteOptions
+  ): Promise<Tx> {
+    const referralCode = params.referralCode?.trim();
+    if (!referralCode) {
+      throw new Error("depositWithReferral requires a non-empty referralCode");
+    }
+
+    const config = this.getLstConfigOrThrow(params.asset);
+
+    if (params.amount.getDecimals() !== config.decimals) {
+      throw new Error(
+        `Amount decimals mismatch: expected ${config.decimals} for ${config.symbol}, got ${params.amount.getDecimals()}`
+      );
+    }
+
+    const token = {
+      name: config.symbol,
+      address: config.assetAddress,
+      decimals: config.decimals,
+      symbol: config.symbol,
+    };
+
+    const approveCall = this.wallet
+      .erc20(token)
+      .populateApprove(config.lstAddress, params.amount);
+
+    const depositWithReferralCall: Call = {
+      contractAddress: config.lstAddress,
+      entrypoint: "deposit_with_referral",
+      calldata: CallData.compile([
+        uint256.bnToUint256(params.amount.toBase()),
+        this.wallet.address,
+        byteArray.byteArrayFromString(referralCode),
+      ]),
+    };
+
+    return this.wallet.execute([approveCall, depositWithReferralCall], options);
   }
 
   async withdraw(

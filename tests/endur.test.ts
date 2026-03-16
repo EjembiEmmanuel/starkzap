@@ -84,9 +84,27 @@ describe("Endur", () => {
     it("should return all assets when asset is undefined", async () => {
       const wallet = createMockWallet();
       const lstStatsJson = [
-        { asset: "STRK", apy: 0.1, apyInPercentage: "10%" },
-        { asset: "WBTC", apy: 0.05, apyInPercentage: "5%" },
-        { asset: "tBTC", apy: 0.04, apyInPercentage: "4%" },
+        {
+          asset: "STRK",
+          apy: 0.1,
+          apyInPercentage: "10%",
+          tvlUsd: 1000,
+          tvlAsset: 500,
+        },
+        {
+          asset: "WBTC",
+          apy: 0.05,
+          apyInPercentage: "5%",
+          tvlUsd: 100,
+          tvlAsset: 2,
+        },
+        {
+          asset: "tBTC",
+          apy: 0.04,
+          apyInPercentage: "4%",
+          tvlUsd: 50,
+          tvlAsset: 1,
+        },
       ];
       const fetcher = vi.fn().mockResolvedValue({
         ok: true,
@@ -114,8 +132,20 @@ describe("Endur", () => {
     it("should return only STRK when asset is STRK", async () => {
       const wallet = createMockWallet();
       const lstStatsJson = [
-        { asset: "STRK", apy: 0.12, apyInPercentage: "12%" },
-        { asset: "WBTC", apy: 0.05, apyInPercentage: "5%" },
+        {
+          asset: "STRK",
+          apy: 0.12,
+          apyInPercentage: "12%",
+          tvlUsd: 1000,
+          tvlAsset: 500,
+        },
+        {
+          asset: "WBTC",
+          apy: 0.05,
+          apyInPercentage: "5%",
+          tvlUsd: 100,
+          tvlAsset: 2,
+        },
       ];
       const fetcher = vi.fn().mockResolvedValue({
         ok: true,
@@ -137,8 +167,20 @@ describe("Endur", () => {
     it("should return only requested asset when asset is specified", async () => {
       const wallet = createMockWallet();
       const lstStatsJson = [
-        { asset: "STRK", apy: 0.1, apyInPercentage: "10%" },
-        { asset: "WBTC", apy: 0.05, apyInPercentage: "5%" },
+        {
+          asset: "STRK",
+          apy: 0.1,
+          apyInPercentage: "10%",
+          tvlUsd: 1000,
+          tvlAsset: 500,
+        },
+        {
+          asset: "WBTC",
+          apy: 0.05,
+          apyInPercentage: "5%",
+          tvlUsd: 100,
+          tvlAsset: 2,
+        },
       ];
       const fetcher = vi.fn().mockResolvedValue({
         ok: true,
@@ -180,8 +222,20 @@ describe("Endur", () => {
     it("should return all assets when asset is undefined", async () => {
       const wallet = createMockWallet();
       const lstStatsJson = [
-        { asset: "STRK", tvlUsd: 1000, tvlAsset: 500 },
-        { asset: "WBTC", tvlUsd: 100, tvlAsset: 2 },
+        {
+          asset: "STRK",
+          tvlUsd: 1000,
+          tvlAsset: 500,
+          apy: 0.1,
+          apyInPercentage: "10%",
+        },
+        {
+          asset: "WBTC",
+          tvlUsd: 100,
+          tvlAsset: 2,
+          apy: 0.05,
+          apyInPercentage: "5%",
+        },
       ];
       const fetcher = vi.fn().mockResolvedValue({
         ok: true,
@@ -213,8 +267,20 @@ describe("Endur", () => {
     it("should return only requested asset when asset is specified", async () => {
       const wallet = createMockWallet();
       const lstStatsJson = [
-        { asset: "STRK", tvlUsd: 1000, tvlAsset: 500 },
-        { asset: "WBTC", tvlUsd: 100, tvlAsset: 2 },
+        {
+          asset: "STRK",
+          tvlUsd: 1000,
+          tvlAsset: 500,
+          apy: 0.1,
+          apyInPercentage: "10%",
+        },
+        {
+          asset: "WBTC",
+          tvlUsd: 100,
+          tvlAsset: 2,
+          apy: 0.05,
+          apyInPercentage: "5%",
+        },
       ];
       const fetcher = vi.fn().mockResolvedValue({
         ok: true,
@@ -289,6 +355,92 @@ describe("Endur", () => {
       await expect(
         endur.deposit(
           { asset: "STRK", amount: Amount.parse("100", 8) }, // STRK has 18 decimals
+          {}
+        )
+      ).rejects.toThrow("Amount decimals mismatch");
+    });
+  });
+
+  describe("depositWithReferral", () => {
+    it("should call execute with approve and deposit_with_referral calls", async () => {
+      const wallet = createMockWallet();
+      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+
+      const tx = await endur.depositWithReferral(
+        {
+          asset: "STRK",
+          amount: Amount.parse("100", 18),
+          referralCode: "ABC123",
+        },
+        {}
+      );
+
+      expect(wallet.execute).toHaveBeenCalledTimes(1);
+      const [calls] = (wallet.execute as ReturnType<typeof vi.fn>).mock
+        .calls[0]!;
+      expect(calls).toHaveLength(2);
+      expect(calls[0].entrypoint).toBe("approve");
+      expect(calls[1].entrypoint).toBe("deposit_with_referral");
+      expect(calls[1].contractAddress).toBeDefined();
+      expect(Array.isArray(calls[1].calldata)).toBe(true);
+      expect(calls[1].calldata!.length).toBeGreaterThanOrEqual(3);
+      expect(tx.hash).toBe("0xmocktxhash");
+    });
+
+    it("should throw for empty referralCode", async () => {
+      const wallet = createMockWallet();
+      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+
+      await expect(
+        endur.depositWithReferral(
+          {
+            asset: "STRK",
+            amount: Amount.parse("100", 18),
+            referralCode: "",
+          },
+          {}
+        )
+      ).rejects.toThrow("requires a non-empty referralCode");
+
+      await expect(
+        endur.depositWithReferral(
+          {
+            asset: "STRK",
+            amount: Amount.parse("100", 18),
+            referralCode: "   ",
+          },
+          {}
+        )
+      ).rejects.toThrow("requires a non-empty referralCode");
+    });
+
+    it("should throw for unsupported asset", async () => {
+      const wallet = createMockWallet();
+      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+
+      await expect(
+        endur.depositWithReferral(
+          {
+            asset: "UNKNOWN",
+            amount: Amount.parse("100", 18),
+            referralCode: "ABC123",
+          },
+          {}
+        )
+      ).rejects.toThrow("Unsupported asset");
+    });
+
+    it("should throw on decimal mismatch", async () => {
+      const wallet = createMockWallet();
+      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+
+      await expect(
+        endur.depositWithReferral(
+          {
+            asset: "STRK",
+            amount: Amount.parse("100", 8),
+            referralCode: "ABC123",
+          },
           {}
         )
       ).rejects.toThrow("Amount decimals mismatch");
