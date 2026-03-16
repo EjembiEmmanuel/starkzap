@@ -33,6 +33,12 @@ export * from "@/swap";
 // Endur
 export * from "@/endur";
 
+// Confidential
+export * from "@/confidential";
+
+// Lending
+export * from "@/lending";
+
 // Types
 export * from "@/types";
 

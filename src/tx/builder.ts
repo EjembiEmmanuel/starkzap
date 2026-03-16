@@ -4,12 +4,26 @@ import type { Tx } from "@/tx";
 import type { SwapInput } from "@/swap";
 import { resolveSwapInput } from "@/swap/utils";
 import type {
+  LendingBorrowRequest,
+  LendingDepositRequest,
+  LendingWithdrawMaxRequest,
+  PreparedLendingAction,
+  LendingRepayRequest,
+  LendingWithdrawRequest,
+} from "@/lending";
+import type {
   Address,
   Amount,
   ExecuteOptions,
   PreflightResult,
   Token,
 } from "@/types";
+import type { ConfidentialProvider } from "@/confidential";
+import type {
+  ConfidentialFundDetails,
+  ConfidentialTransferDetails,
+  ConfidentialWithdrawDetails,
+} from "@/confidential";
 
 /**
  * Fluent transaction builder for batching multiple operations into a single transaction.
@@ -68,6 +82,20 @@ export class TxBuilder {
       return [];
     });
     this.pending.push(tracked);
+  }
+
+  private queueLendingAction(
+    action: string,
+    preparedPromise: Promise<PreparedLendingAction>
+  ): this {
+    const calls = preparedPromise.then((prepared) => {
+      if (prepared.calls.length === 0) {
+        throw new Error(`Lending action "${action}" returned no calls`);
+      }
+      return prepared.calls;
+    });
+    this.queueAsyncCalls(calls);
+    return this;
   }
 
   private throwPendingErrorsIfAny(): void {
@@ -237,6 +265,56 @@ export class TxBuilder {
     });
     this.queueAsyncCalls(p);
     return this;
+  }
+
+  /**
+   * Add a lending deposit operation.
+   */
+  lendDeposit(request: LendingDepositRequest): this {
+    return this.queueLendingAction(
+      "deposit",
+      this.wallet.lending().prepareDeposit(request)
+    );
+  }
+
+  /**
+   * Add a lending withdraw operation.
+   */
+  lendWithdraw(request: LendingWithdrawRequest): this {
+    return this.queueLendingAction(
+      "withdraw",
+      this.wallet.lending().prepareWithdraw(request)
+    );
+  }
+
+  /**
+   * Add a max-withdraw lending operation.
+   */
+  lendWithdrawMax(request: LendingWithdrawMaxRequest): this {
+    return this.queueLendingAction(
+      "withdrawMax",
+      this.wallet.lending().prepareWithdrawMax(request)
+    );
+  }
+
+  /**
+   * Add a lending borrow operation.
+   */
+  lendBorrow(request: LendingBorrowRequest): this {
+    return this.queueLendingAction(
+      "borrow",
+      this.wallet.lending().prepareBorrow(request)
+    );
+  }
+
+  /**
+   * Add a lending repay operation.
+   */
+  lendRepay(request: LendingRepayRequest): this {
+    return this.queueLendingAction(
+      "repay",
+      this.wallet.lending().prepareRepay(request)
+    );
   }
 
   // ============================================================
@@ -412,6 +490,89 @@ export class TxBuilder {
       .staking(poolAddress)
       .then((s) => [s.populateExit(this.wallet.address)]);
     this.queueAsyncCalls(p);
+    return this;
+  }
+
+  // ============================================================
+  // Confidential operations
+  // ============================================================
+
+  /**
+   * Fund a confidential account.
+   *
+   * The provider returns all necessary calls (including ERC20 approve
+   * when required), so no manual approve step is needed.
+   *
+   * @param confidential - A {@link ConfidentialProvider} instance
+   * @param details - Fund parameters (amount, sender)
+   * @returns this (for chaining)
+   *
+   * @example
+   * ```ts
+   * wallet.tx()
+   *   .confidentialFund(confidential, { amount: Amount.fromRaw(100n, token), sender: wallet.address })
+   *   .send();
+   * ```
+   */
+  confidentialFund(
+    confidential: ConfidentialProvider,
+    details: ConfidentialFundDetails
+  ): this {
+    this.queueAsyncCalls(confidential.fund(details));
+    return this;
+  }
+
+  /**
+   * Transfer between confidential accounts.
+   *
+   * Generates ZK proofs for the confidential transfer.
+   *
+   * @param confidential - A {@link ConfidentialProvider} instance
+   * @param details - Transfer parameters (amount, recipient pubkey, sender)
+   * @returns this (for chaining)
+   *
+   * @example
+   * ```ts
+   * wallet.tx()
+   *   .confidentialTransfer(confidential, {
+   *     amount: Amount.fromRaw(50n, token),
+   *     to: recipientPubKey,
+   *     sender: wallet.address,
+   *   })
+   *   .send();
+   * ```
+   */
+  confidentialTransfer(
+    confidential: ConfidentialProvider,
+    details: ConfidentialTransferDetails
+  ): this {
+    this.queueAsyncCalls(confidential.transfer(details));
+    return this;
+  }
+
+  /**
+   * Withdraw from a confidential account to a public address.
+   *
+   * @param confidential - A {@link ConfidentialProvider} instance
+   * @param details - Withdraw parameters (amount, recipient, sender)
+   * @returns this (for chaining)
+   *
+   * @example
+   * ```ts
+   * wallet.tx()
+   *   .confidentialWithdraw(confidential, {
+   *     amount: Amount.fromRaw(50n, token),
+   *     to: wallet.address,
+   *     sender: wallet.address,
+   *   })
+   *   .send();
+   * ```
+   */
+  confidentialWithdraw(
+    confidential: ConfidentialProvider,
+    details: ConfidentialWithdrawDetails
+  ): this {
+    this.queueAsyncCalls(confidential.withdraw(details));
     return this;
   }
 
