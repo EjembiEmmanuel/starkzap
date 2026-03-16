@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fromAddress, Amount, ChainId } from "@/types";
 import type { WalletInterface } from "@/wallet/interface";
-import { Endur } from "@/endur";
+import { Endur, EndurAssetSymbol } from "@/endur";
 import { getEndurLstConfig } from "@/endur/presets";
 
 const mockTx = {
@@ -158,9 +158,12 @@ describe("Endur", () => {
         fetcher: fetcher as typeof fetch,
       });
 
-      const result = await endur.getAPY("STRK");
+      const result = await endur.getAPY(EndurAssetSymbol("STRK"));
 
-      expect(result.STRK).toEqual({ apy: 0.12, apyInPercentage: "12%" });
+      expect(result[EndurAssetSymbol("STRK")]).toEqual({
+        apy: 0.12,
+        apyInPercentage: "12%",
+      });
       expect(Object.keys(result)).toEqual(["STRK"]);
       expect(fetcher).toHaveBeenCalledTimes(1);
     });
@@ -193,9 +196,12 @@ describe("Endur", () => {
         fetcher: fetcher as typeof fetch,
       });
 
-      const result = await endur.getAPY("WBTC");
+      const result = await endur.getAPY(EndurAssetSymbol("WBTC"));
 
-      expect(result.WBTC).toEqual({ apy: 0.05, apyInPercentage: "5%" });
+      expect(result[EndurAssetSymbol("WBTC")]).toEqual({
+        apy: 0.05,
+        apyInPercentage: "5%",
+      });
       expect(Object.keys(result)).toEqual(["WBTC"]);
       expect(fetcher).toHaveBeenCalledTimes(1);
     });
@@ -294,7 +300,7 @@ describe("Endur", () => {
         fetcher: fetcher as typeof fetch,
       });
 
-      const result = await endur.getTVL("WBTC");
+      const result = await endur.getTVL(EndurAssetSymbol("WBTC"));
 
       expect(result).toHaveLength(1);
       expect(result[0]).toEqual(
@@ -328,7 +334,7 @@ describe("Endur", () => {
       const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
 
       const tx = await endur.deposit(
-        { asset: "STRK", amount: Amount.parse("100", 18) },
+        { asset: EndurAssetSymbol("STRK"), amount: Amount.parse("100", 18) },
         {}
       );
 
@@ -346,7 +352,13 @@ describe("Endur", () => {
       const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
 
       await expect(
-        endur.deposit({ asset: "UNKNOWN", amount: Amount.parse("100", 18) }, {})
+        endur.deposit(
+          {
+            asset: EndurAssetSymbol("UNKNOWN"),
+            amount: Amount.parse("100", 18),
+          },
+          {}
+        )
       ).rejects.toThrow("Unsupported asset");
     });
 
@@ -356,7 +368,10 @@ describe("Endur", () => {
 
       await expect(
         endur.deposit(
-          { asset: "STRK", amount: Amount.parse("100", 8) }, // STRK has 18 decimals
+          {
+            asset: EndurAssetSymbol("STRK"),
+            amount: Amount.parse("100", 8),
+          }, // STRK has 18 decimals
           {}
         )
       ).rejects.toThrow("Amount decimals mismatch");
@@ -370,7 +385,7 @@ describe("Endur", () => {
 
       const tx = await endur.depositWithReferral(
         {
-          asset: "STRK",
+          asset: EndurAssetSymbol("STRK"),
           amount: Amount.parse("100", 18),
           referralCode: "ABC123",
         },
@@ -396,7 +411,7 @@ describe("Endur", () => {
       await expect(
         endur.depositWithReferral(
           {
-            asset: "STRK",
+            asset: EndurAssetSymbol("STRK"),
             amount: Amount.parse("100", 18),
             referralCode: "",
           },
@@ -407,7 +422,7 @@ describe("Endur", () => {
       await expect(
         endur.depositWithReferral(
           {
-            asset: "STRK",
+            asset: EndurAssetSymbol("STRK"),
             amount: Amount.parse("100", 18),
             referralCode: "   ",
           },
@@ -423,7 +438,7 @@ describe("Endur", () => {
       await expect(
         endur.depositWithReferral(
           {
-            asset: "UNKNOWN",
+            asset: EndurAssetSymbol("UNKNOWN"),
             amount: Amount.parse("100", 18),
             referralCode: "ABC123",
           },
@@ -439,7 +454,7 @@ describe("Endur", () => {
       await expect(
         endur.depositWithReferral(
           {
-            asset: "STRK",
+            asset: EndurAssetSymbol("STRK"),
             amount: Amount.parse("100", 8),
             referralCode: "ABC123",
           },
@@ -455,7 +470,7 @@ describe("Endur", () => {
       const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
 
       const tx = await endur.withdraw(
-        { asset: "STRK", amount: Amount.parse("50", 18) },
+        { asset: EndurAssetSymbol("STRK"), amount: Amount.parse("50", 18) },
         {}
       );
 
@@ -472,7 +487,13 @@ describe("Endur", () => {
       const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
 
       await expect(
-        endur.withdraw({ asset: "UNKNOWN", amount: Amount.parse("50", 18) }, {})
+        endur.withdraw(
+          {
+            asset: EndurAssetSymbol("UNKNOWN"),
+            amount: Amount.parse("50", 18),
+          },
+          {}
+        )
       ).rejects.toThrow("Unsupported asset");
     });
 
@@ -481,7 +502,10 @@ describe("Endur", () => {
       const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
 
       await expect(
-        endur.withdraw({ asset: "STRK", amount: Amount.parse("50", 8) }, {})
+        endur.withdraw(
+          { asset: EndurAssetSymbol("STRK"), amount: Amount.parse("50", 8) },
+          {}
+        )
       ).rejects.toThrow("Amount decimals mismatch");
     });
   });
