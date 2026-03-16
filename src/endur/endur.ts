@@ -8,8 +8,31 @@ import {
   type EndurLstConfig,
 } from "@/endur/presets";
 
+declare const EndurAssetSymbolBrand: unique symbol;
+
+/**
+ * Branded type for Endur LST asset symbols (e.g. STRK, WBTC, tBTC).
+ * Use EndurAssetSymbol.from() to create from a string.
+ */
+export type EndurAssetSymbol = string & {
+  readonly [EndurAssetSymbolBrand]: true;
+};
+
+/**
+ * Create an EndurAssetSymbol from a string.
+ * @param symbol - Asset symbol (e.g. "STRK", "WBTC")
+ * @throws Error if symbol is empty or not a string
+ */
+export function EndurAssetSymbol(symbol: string): EndurAssetSymbol {
+  const s = typeof symbol === "string" ? symbol.trim() : "";
+  if (!s) {
+    throw new Error("EndurAssetSymbol requires a non-empty string");
+  }
+  return s as EndurAssetSymbol;
+}
+
 export interface EndurLstStatsItem {
-  asset: string;
+  asset: EndurAssetSymbol;
   tvlUsd: number;
   tvlAsset: number;
   apy: number;
@@ -19,15 +42,15 @@ export interface EndurLstStatsItem {
 export interface EndurOptions {
   apiBaseUrl?: string;
   fetcher?: typeof fetch;
+  timeoutMs?: number;
 }
 
-export type EndurAPYResult = Record<
-  string,
-  { apy: number; apyInPercentage: string }
+export type EndurAPYResult = Partial<
+  Record<EndurAssetSymbol, { apy: number; apyInPercentage: string }>
 >;
 
 export interface EndurTVLItem {
-  asset: string;
+  asset: EndurAssetSymbol;
   tvlUsd: number;
   tvlAsset: number;
 }
@@ -55,6 +78,7 @@ export class Endur {
   private readonly wallet: WalletInterface;
   private readonly apiBaseUrl: string | undefined;
   private readonly fetcher: typeof fetch;
+  private readonly timeoutMs: number;
 
   constructor(wallet: WalletInterface, options?: EndurOptions) {
     this.wallet = wallet;
@@ -62,6 +86,7 @@ export class Endur {
     this.fetcher =
       options?.fetcher ??
       ((url: RequestInfo | URL, init?: RequestInit) => fetch(url, init));
+    this.timeoutMs = options?.timeoutMs ?? 15000;
   }
 
   private assertApiBaseUrl(): string {
@@ -75,7 +100,11 @@ export class Endur {
 
   private async fetchLstStats(): Promise<EndurLstStatsItem[]> {
     const base = this.assertApiBaseUrl();
-    const lstRes = await this.fetcher(`${base}/api/lst/stats`);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const lstRes = await this.fetcher(`${base}/api/lst/stats`, {
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer));
     if (!lstRes.ok) {
       throw new Error(
         `Endur LST stats API failed: ${lstRes.status} ${lstRes.statusText}`
@@ -115,7 +144,7 @@ export class Endur {
         continue;
       }
       valid.push({
-        asset,
+        asset: asset as EndurAssetSymbol,
         apy,
         apyInPercentage,
         tvlUsd,
@@ -135,14 +164,17 @@ export class Endur {
     return items.filter((i) => supported.has(i.asset.toLowerCase()));
   }
 
-  async getAPY(asset?: string): Promise<EndurAPYResult> {
+  async getAPY(asset?: EndurAssetSymbol): Promise<EndurAPYResult> {
     const lsts = this.filterSupportedByChain(await this.fetchLstStats());
     const result: EndurAPYResult = {};
 
     for (const item of lsts) {
       const itemAsset = item.asset;
       if (!itemAsset) continue;
-      if (!asset || itemAsset.toLowerCase() === asset.toLowerCase()) {
+      if (
+        !asset ||
+        itemAsset.toLowerCase() === (asset as string).toLowerCase()
+      ) {
         const apy = typeof item.apy === "number" ? item.apy : 0;
         const apyInPercentage =
           typeof item.apyInPercentage === "string"
@@ -155,10 +187,10 @@ export class Endur {
     return result;
   }
 
-  async getTVL(asset?: string): Promise<EndurTVLResult> {
+  async getTVL(asset?: EndurAssetSymbol): Promise<EndurTVLResult> {
     const lsts = this.filterSupportedByChain(await this.fetchLstStats());
     const mapToTvlItem = (item: EndurLstStatsItem): EndurTVLItem => ({
-      asset: item.asset ?? "",
+      asset: item.asset,
       tvlUsd: typeof item.tvlUsd === "number" ? item.tvlUsd : 0,
       tvlAsset: typeof item.tvlAsset === "number" ? item.tvlAsset : 0,
     });
@@ -174,7 +206,7 @@ export class Endur {
 
   async deposit(
     params: {
-      asset: string;
+      asset: EndurAssetSymbol;
       amount: Amount;
     },
     options?: ExecuteOptions
@@ -221,7 +253,7 @@ export class Endur {
    */
   async depositWithReferral(
     params: {
-      asset: string;
+      asset: EndurAssetSymbol;
       amount: Amount;
       referralCode: string;
     },
@@ -266,7 +298,7 @@ export class Endur {
 
   async withdraw(
     params: {
-      asset: string;
+      asset: EndurAssetSymbol;
       amount: Amount;
     },
     options?: ExecuteOptions
@@ -292,9 +324,9 @@ export class Endur {
     return this.wallet.execute([redeemCall], options);
   }
 
-  private getLstConfigOrThrow(asset: string): EndurLstConfig {
+  private getLstConfigOrThrow(asset: EndurAssetSymbol): EndurLstConfig {
     const chainId = this.wallet.getChainId();
-    const config = getEndurLstConfig(chainId, asset);
+    const config = getEndurLstConfig(chainId, asset as string);
     if (!config) {
       const supported = getSupportedAssetSymbols(chainId).join(", ");
       throw new Error(

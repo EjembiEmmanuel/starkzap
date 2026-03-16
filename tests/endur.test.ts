@@ -125,7 +125,8 @@ describe("Endur", () => {
       });
       expect(fetcher).toHaveBeenCalledTimes(1);
       expect(fetcher).toHaveBeenCalledWith(
-        "https://app.endur.fi/api/lst/stats"
+        "https://app.endur.fi/api/lst/stats",
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
       );
     });
 
@@ -260,7 +261,8 @@ describe("Endur", () => {
       expect(result).toHaveLength(2);
       expect(fetcher).toHaveBeenCalledTimes(1);
       expect(fetcher).toHaveBeenCalledWith(
-        "https://app.endur.fi/api/lst/stats"
+        "https://app.endur.fi/api/lst/stats",
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
       );
     });
 

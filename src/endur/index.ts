@@ -1,4 +1,4 @@
-export { Endur } from "@/endur/endur";
+export { Endur, EndurAssetSymbol } from "@/endur/endur";
 export type {
   EndurOptions,
   EndurAPYResult,
