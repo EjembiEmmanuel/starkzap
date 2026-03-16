@@ -1,29 +1,20 @@
 import { type Call, Contract, uint256 } from "starknet";
 import type { WalletInterface } from "@/wallet/interface";
 import type { Amount, ExecuteOptions } from "@/types";
-import { fromAddress } from "@/types/address";
 import type { Tx } from "@/tx";
-import { getEndurLstConfig, type EndurLstConfig } from "@/endur/presets";
+import {
+  getEndurLstConfig,
+  getSupportedAssetSymbols,
+  type EndurLstConfig,
+} from "@/endur/presets";
 import { LST_ABI } from "@/endur/abi/lst";
-
-export interface EndurStatsResponse {
-  asset: string;
-  tvl: number;
-  tvlStrk: number;
-  apy: number;
-  apyInPercentage: string;
-}
 
 export interface EndurLstStatsItem {
   asset: string;
-  assetAddress?: string;
-  lstAddress?: string;
   tvlUsd: number;
   tvlAsset: number;
   apy: number;
   apyInPercentage: string;
-  exchangeRate?: number;
-  preciseExchangeRate?: string;
 }
 
 export interface EndurOptions {
@@ -31,15 +22,18 @@ export interface EndurOptions {
   fetcher?: typeof fetch;
 }
 
-export interface EndurAPYResult {
-  strk?: { apy: number; apyInPercentage: string };
-  lsts?: Record<string, { apy: number; apyInPercentage: string }>;
+export type EndurAPYResult = Record<
+  string,
+  { apy: number; apyInPercentage: string }
+>;
+
+export interface EndurTVLItem {
+  asset: string;
+  tvlUsd: number;
+  tvlAsset: number;
 }
 
-export interface EndurTVLResult {
-  strk?: { tvl: number; tvlStrk: number };
-  lsts?: EndurLstStatsItem[];
-}
+export type EndurTVLResult = EndurTVLItem[];
 
 /**
  * Endur module for interacting with Endur LST staking via StarkZap.
@@ -77,93 +71,54 @@ export class Endur {
         "Endur apiBaseUrl is required for getAPY and getTVL. Pass it in the constructor options."
       );
     }
-    const base = this.apiBaseUrl.trim().replace(/\/$/, "");
-    return base;
+    return this.apiBaseUrl.trim().replace(/\/$/, "");
   }
 
   async getAPY(asset?: string): Promise<EndurAPYResult> {
     const base = this.assertApiBaseUrl();
-    const result: EndurAPYResult = {};
-
-    const statsRes = await this.fetcher(`${base}/api/stats`);
-    if (!statsRes.ok) {
+    const lstRes = await this.fetcher(`${base}/api/lst/stats`);
+    if (!lstRes.ok) {
       throw new Error(
-        `Endur stats API failed: ${statsRes.status} ${statsRes.statusText}`
+        `Endur LST stats API failed: ${lstRes.status} ${lstRes.statusText}`
       );
     }
-    const stats: EndurStatsResponse = await statsRes.json();
-    result.strk = {
-      apy: stats.apy,
-      apyInPercentage: stats.apyInPercentage,
-    };
+    const lsts: EndurLstStatsItem[] = await lstRes.json();
+    const result: EndurAPYResult = {};
 
-    if (asset && asset.toUpperCase() !== "STRK") {
-      const lstRes = await this.fetcher(`${base}/api/lst/stats`);
-      if (!lstRes.ok) {
-        throw new Error(
-          `Endur LST stats API failed: ${lstRes.status} ${lstRes.statusText}`
-        );
-      }
-      const lsts: EndurLstStatsItem[] = await lstRes.json();
-      result.lsts = {};
-      for (const item of lsts) {
-        if (item.asset?.toLowerCase() === asset.toLowerCase()) {
-          result.lsts[item.asset] = {
-            apy: item.apy,
-            apyInPercentage: item.apyInPercentage,
-          };
-          break;
-        }
-      }
-    } else if (!asset) {
-      const lstRes = await this.fetcher(`${base}/api/lst/stats`);
-      if (lstRes.ok) {
-        const lsts: EndurLstStatsItem[] = await lstRes.json();
-        result.lsts = {};
-        for (const item of lsts) {
-          result.lsts[item.asset] = {
-            apy: item.apy,
-            apyInPercentage: item.apyInPercentage,
-          };
-        }
+    for (const item of lsts) {
+      if (!asset || item.asset?.toLowerCase() === asset.toLowerCase()) {
+        result[item.asset] = {
+          apy: item.apy,
+          apyInPercentage: item.apyInPercentage,
+        };
+        if (asset) break;
       }
     }
-
     return result;
   }
 
   async getTVL(asset?: string): Promise<EndurTVLResult> {
     const base = this.assertApiBaseUrl();
-    const result: EndurTVLResult = {};
-
-    const statsRes = await this.fetcher(`${base}/api/stats`);
-    if (!statsRes.ok) {
+    const lstRes = await this.fetcher(`${base}/api/lst/stats`);
+    if (!lstRes.ok) {
       throw new Error(
-        `Endur stats API failed: ${statsRes.status} ${statsRes.statusText}`
+        `Endur LST stats API failed: ${lstRes.status} ${lstRes.statusText}`
       );
     }
-    const stats: EndurStatsResponse = await statsRes.json();
-    result.strk = { tvl: stats.tvl, tvlStrk: stats.tvlStrk };
+    const lsts: EndurLstStatsItem[] = await lstRes.json();
+    const mapToTvlItem = (item: EndurLstStatsItem): EndurTVLItem => ({
+      asset: item.asset,
+      tvlUsd: item.tvlUsd,
+      tvlAsset: item.tvlAsset,
+    });
 
-    if (!asset || asset.toUpperCase() !== "STRK") {
-      const lstRes = await this.fetcher(`${base}/api/lst/stats`);
-      if (!lstRes.ok) {
-        throw new Error(
-          `Endur LST stats API failed: ${lstRes.status} ${lstRes.statusText}`
-        );
-      }
-      const lsts: EndurLstStatsItem[] = await lstRes.json();
-      if (asset) {
-        const match = lsts.find(
-          (item) => item.asset?.toLowerCase() === asset.toLowerCase()
-        );
-        result.lsts = match ? [match] : [];
-      } else {
-        result.lsts = lsts;
-      }
+    if (asset) {
+      const match = lsts.find(
+        (item) => item.asset?.toLowerCase() === asset.toLowerCase()
+      );
+      return match ? [mapToTvlItem(match)] : [];
     }
-
-    return result;
+    return lsts.map(mapToTvlItem);
   }
 
   async deposit(
@@ -181,17 +136,19 @@ export class Endur {
       );
     }
 
+    // Token object for approve only; name set from symbol for simplicity.
     const token = {
       name: config.symbol,
-      address: fromAddress(config.assetAddress),
+      address: config.assetAddress,
       decimals: config.decimals,
       symbol: config.symbol,
     };
 
     const approveCall = this.wallet
       .erc20(token)
-      .populateApprove(fromAddress(config.lstAddress), params.amount);
+      .populateApprove(config.lstAddress, params.amount);
 
+    // Contract used only for populate() (calldata); not attached to provider for reads.
     const lstContract = new Contract({
       abi: LST_ABI,
       address: config.lstAddress,
@@ -219,6 +176,7 @@ export class Endur {
       );
     }
 
+    // Contract used only for populate() (calldata); not attached to provider for reads.
     const lstContract = new Contract({
       abi: LST_ABI,
       address: config.lstAddress,
@@ -233,11 +191,12 @@ export class Endur {
   }
 
   private getLstConfigOrThrow(asset: string): EndurLstConfig {
-    const config = getEndurLstConfig(this.wallet.getChainId(), asset);
+    const chainId = this.wallet.getChainId();
+    const config = getEndurLstConfig(chainId, asset);
     if (!config) {
+      const supported = getSupportedAssetSymbols(chainId).join(", ");
       throw new Error(
-        `Unsupported asset "${asset}" for chain ${this.wallet.getChainId().toLiteral()}. ` +
-          "Use STRK, WBTC, tBTC, LBTC, solvBTC on mainnet, or STRK, TBTC1, TBTC2 on Sepolia."
+        `Unsupported asset "${asset}" for chain ${chainId.toLiteral()}. Supported: ${supported || "none"}.`
       );
     }
     return config;

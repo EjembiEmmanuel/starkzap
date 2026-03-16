@@ -3,11 +3,12 @@ export type {
   EndurOptions,
   EndurAPYResult,
   EndurTVLResult,
-  EndurStatsResponse,
+  EndurTVLItem,
   EndurLstStatsItem,
 } from "@/endur/endur";
 
 export {
   getEndurLstConfig,
+  getSupportedAssetSymbols,
   type EndurLstConfig,
 } from "@/endur/presets";
