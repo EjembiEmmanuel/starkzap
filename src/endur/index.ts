@@ -3,7 +3,6 @@ export type {
   EndurOptions,
   EndurAPYResult,
   EndurTVLResult,
-  EndurTVLItem,
   EndurLstStatsItem,
 } from "@/endur/endur";
 

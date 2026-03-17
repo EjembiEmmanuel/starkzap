@@ -60,26 +60,6 @@ describe("getEndurLstConfig", () => {
 });
 
 describe("Endur", () => {
-  describe("constructor and apiBaseUrl", () => {
-    it("should throw when getAPY called without apiBaseUrl", async () => {
-      const wallet = createMockWallet();
-      const endur = new Endur(wallet);
-
-      await expect(endur.getAPY()).rejects.toThrow(
-        "Endur apiBaseUrl is required for getAPY and getTVL"
-      );
-    });
-
-    it("should throw when getTVL called without apiBaseUrl", async () => {
-      const wallet = createMockWallet();
-      const endur = new Endur(wallet);
-
-      await expect(endur.getTVL()).rejects.toThrow(
-        "Endur apiBaseUrl is required for getAPY and getTVL"
-      );
-    });
-  });
-
   describe("getAPY with mocked fetcher", () => {
     it("should return all assets when asset is undefined", async () => {
       const wallet = createMockWallet();
@@ -112,7 +92,6 @@ describe("Endur", () => {
       });
 
       const endur = new Endur(wallet, {
-        apiBaseUrl: "https://app.endur.fi",
         fetcher: fetcher as typeof fetch,
       });
 
@@ -154,7 +133,6 @@ describe("Endur", () => {
       });
 
       const endur = new Endur(wallet, {
-        apiBaseUrl: "https://app.endur.fi",
         fetcher: fetcher as typeof fetch,
       });
 
@@ -192,7 +170,6 @@ describe("Endur", () => {
       });
 
       const endur = new Endur(wallet, {
-        apiBaseUrl: "https://app.endur.fi",
         fetcher: fetcher as typeof fetch,
       });
 
@@ -215,7 +192,6 @@ describe("Endur", () => {
       });
 
       const endur = new Endur(wallet, {
-        apiBaseUrl: "https://app.endur.fi",
         fetcher: fetcher as typeof fetch,
       });
 
@@ -250,21 +226,20 @@ describe("Endur", () => {
       });
 
       const endur = new Endur(wallet, {
-        apiBaseUrl: "https://app.endur.fi",
         fetcher: fetcher as typeof fetch,
       });
 
       const result = await endur.getTVL();
 
-      const strkItem = result.find((i) => i.asset === "STRK");
-      expect(strkItem).toEqual(
-        expect.objectContaining({ asset: "STRK", tvlUsd: 1000, tvlAsset: 500 })
-      );
-      const wbtcItem = result.find((i) => i.asset === "WBTC");
-      expect(wbtcItem).toEqual(
-        expect.objectContaining({ asset: "WBTC", tvlUsd: 100, tvlAsset: 2 })
-      );
-      expect(result).toHaveLength(2);
+      expect(result[EndurAssetSymbol("STRK")]).toEqual({
+        tvlUsd: 1000,
+        tvlAsset: 500,
+      });
+      expect(result[EndurAssetSymbol("WBTC")]).toEqual({
+        tvlUsd: 100,
+        tvlAsset: 2,
+      });
+      expect(Object.keys(result)).toHaveLength(2);
       expect(fetcher).toHaveBeenCalledTimes(1);
       expect(fetcher).toHaveBeenCalledWith(
         "https://app.endur.fi/api/lst/stats",
@@ -296,16 +271,16 @@ describe("Endur", () => {
       });
 
       const endur = new Endur(wallet, {
-        apiBaseUrl: "https://app.endur.fi",
         fetcher: fetcher as typeof fetch,
       });
 
       const result = await endur.getTVL(EndurAssetSymbol("WBTC"));
 
-      expect(result).toHaveLength(1);
-      expect(result[0]).toEqual(
-        expect.objectContaining({ asset: "WBTC", tvlUsd: 100, tvlAsset: 2 })
-      );
+      expect(result[EndurAssetSymbol("WBTC")]).toEqual({
+        tvlUsd: 100,
+        tvlAsset: 2,
+      });
+      expect(Object.keys(result)).toEqual(["WBTC"]);
       expect(fetcher).toHaveBeenCalledTimes(1);
     });
 
@@ -318,7 +293,6 @@ describe("Endur", () => {
       });
 
       const endur = new Endur(wallet, {
-        apiBaseUrl: "https://app.endur.fi",
         fetcher: fetcher as typeof fetch,
       });
 
@@ -331,7 +305,7 @@ describe("Endur", () => {
   describe("deposit", () => {
     it("should call execute with approve and deposit calls", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+      const endur = new Endur(wallet);
 
       const tx = await endur.deposit(
         { asset: EndurAssetSymbol("STRK"), amount: Amount.parse("100", 18) },
@@ -349,7 +323,7 @@ describe("Endur", () => {
 
     it("should throw for unsupported asset", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+      const endur = new Endur(wallet);
 
       await expect(
         endur.deposit(
@@ -364,7 +338,7 @@ describe("Endur", () => {
 
     it("should throw on decimal mismatch", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+      const endur = new Endur(wallet);
 
       await expect(
         endur.deposit(
@@ -378,10 +352,72 @@ describe("Endur", () => {
     });
   });
 
+  describe("depositToValidator", () => {
+    it("should call execute with approve and deposit_to_validator calls", async () => {
+      const wallet = createMockWallet();
+      const endur = new Endur(wallet);
+      const validatorAddress =
+        "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+      const tx = await endur.depositToValidator(
+        {
+          asset: EndurAssetSymbol("STRK"),
+          amount: Amount.parse("100", 18),
+          validatorAddress,
+        },
+        {}
+      );
+
+      expect(wallet.execute).toHaveBeenCalledTimes(1);
+      const [calls] = (wallet.execute as ReturnType<typeof vi.fn>).mock
+        .calls[0]!;
+      expect(calls).toHaveLength(2);
+      expect(calls[0].entrypoint).toBe("approve");
+      expect(calls[1].entrypoint).toBe("deposit_to_validator");
+      expect(calls[1].contractAddress).toBeDefined();
+      expect(Array.isArray(calls[1].calldata)).toBe(true);
+      expect(calls[1].calldata!.length).toBeGreaterThanOrEqual(3);
+      expect(tx.hash).toBe("0xmocktxhash");
+    });
+
+    it("should throw for empty validatorAddress", async () => {
+      const wallet = createMockWallet();
+      const endur = new Endur(wallet);
+
+      await expect(
+        endur.depositToValidator(
+          {
+            asset: EndurAssetSymbol("STRK"),
+            amount: Amount.parse("100", 18),
+            validatorAddress: "",
+          },
+          {}
+        )
+      ).rejects.toThrow("requires a non-empty validatorAddress");
+    });
+
+    it("should throw for unsupported asset", async () => {
+      const wallet = createMockWallet();
+      const endur = new Endur(wallet);
+
+      await expect(
+        endur.depositToValidator(
+          {
+            asset: EndurAssetSymbol("UNKNOWN"),
+            amount: Amount.parse("100", 18),
+            validatorAddress:
+              "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          },
+          {}
+        )
+      ).rejects.toThrow("Unsupported asset");
+    });
+  });
+
   describe("depositWithReferral", () => {
     it("should call execute with approve and deposit_with_referral calls", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+      const endur = new Endur(wallet);
 
       const tx = await endur.depositWithReferral(
         {
@@ -406,7 +442,7 @@ describe("Endur", () => {
 
     it("should throw for empty referralCode", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+      const endur = new Endur(wallet);
 
       await expect(
         endur.depositWithReferral(
@@ -433,7 +469,7 @@ describe("Endur", () => {
 
     it("should throw for unsupported asset", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+      const endur = new Endur(wallet);
 
       await expect(
         endur.depositWithReferral(
@@ -449,7 +485,7 @@ describe("Endur", () => {
 
     it("should throw on decimal mismatch", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+      const endur = new Endur(wallet);
 
       await expect(
         endur.depositWithReferral(
@@ -467,7 +503,7 @@ describe("Endur", () => {
   describe("withdraw", () => {
     it("should call execute with redeem call", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+      const endur = new Endur(wallet);
 
       const tx = await endur.withdraw(
         { asset: EndurAssetSymbol("STRK"), amount: Amount.parse("50", 18) },
@@ -484,7 +520,7 @@ describe("Endur", () => {
 
     it("should throw for unsupported asset", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+      const endur = new Endur(wallet);
 
       await expect(
         endur.withdraw(
@@ -499,7 +535,7 @@ describe("Endur", () => {
 
     it("should throw on decimal mismatch", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+      const endur = new Endur(wallet);
 
       await expect(
         endur.withdraw(

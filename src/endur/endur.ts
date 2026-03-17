@@ -1,4 +1,5 @@
 import { byteArray, CallData, type Call, uint256 } from "starknet";
+import { fromAddress } from "@/types/address";
 import type { WalletInterface } from "@/wallet/interface";
 import type { Amount, ExecuteOptions } from "@/types";
 import type { Tx } from "@/tx";
@@ -7,6 +8,9 @@ import {
   getSupportedAssetSymbols,
   type EndurLstConfig,
 } from "@/endur/presets";
+
+/** Endur API base URL (same for mainnet and testnet). */
+const ENDUR_API_BASE = "https://app.endur.fi";
 
 declare const EndurAssetSymbolBrand: unique symbol;
 
@@ -40,7 +44,6 @@ export interface EndurLstStatsItem {
 }
 
 export interface EndurOptions {
-  apiBaseUrl?: string;
   fetcher?: typeof fetch;
   timeoutMs?: number;
 }
@@ -49,13 +52,9 @@ export type EndurAPYResult = Partial<
   Record<EndurAssetSymbol, { apy: number; apyInPercentage: string }>
 >;
 
-export interface EndurTVLItem {
-  asset: EndurAssetSymbol;
-  tvlUsd: number;
-  tvlAsset: number;
-}
-
-export type EndurTVLResult = EndurTVLItem[];
+export type EndurTVLResult = Partial<
+  Record<EndurAssetSymbol, { tvlUsd: number; tvlAsset: number }>
+>;
 
 /**
  * Endur module for interacting with Endur LST staking via StarkZap.
@@ -67,7 +66,7 @@ export type EndurTVLResult = EndurTVLItem[];
  * @example
  * ```ts
  * const wallet = await sdk.connectWallet({ account: { signer } });
- * const endur = new Endur(wallet, { apiBaseUrl: "https://app.endur.fi" });
+ * const endur = new Endur(wallet);
  *
  * const apy = await endur.getAPY();
  * const tvl = await endur.getTVL();
@@ -76,33 +75,21 @@ export type EndurTVLResult = EndurTVLItem[];
  */
 export class Endur {
   private readonly wallet: WalletInterface;
-  private readonly apiBaseUrl: string | undefined;
   private readonly fetcher: typeof fetch;
   private readonly timeoutMs: number;
 
   constructor(wallet: WalletInterface, options?: EndurOptions) {
     this.wallet = wallet;
-    this.apiBaseUrl = options?.apiBaseUrl;
     this.fetcher =
       options?.fetcher ??
       ((url: RequestInfo | URL, init?: RequestInit) => fetch(url, init));
     this.timeoutMs = options?.timeoutMs ?? 15000;
   }
 
-  private assertApiBaseUrl(): string {
-    if (!this.apiBaseUrl?.trim()) {
-      throw new Error(
-        "Endur apiBaseUrl is required for getAPY and getTVL. Pass it in the constructor options."
-      );
-    }
-    return this.apiBaseUrl.trim().replace(/\/$/, "");
-  }
-
   private async fetchLstStats(): Promise<EndurLstStatsItem[]> {
-    const base = this.assertApiBaseUrl();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    const lstRes = await this.fetcher(`${base}/api/lst/stats`, {
+    const lstRes = await this.fetcher(`${ENDUR_API_BASE}/api/lst/stats`, {
       signal: controller.signal,
     }).finally(() => clearTimeout(timer));
     if (!lstRes.ok) {
@@ -189,19 +176,23 @@ export class Endur {
 
   async getTVL(asset?: EndurAssetSymbol): Promise<EndurTVLResult> {
     const lsts = this.filterSupportedByChain(await this.fetchLstStats());
-    const mapToTvlItem = (item: EndurLstStatsItem): EndurTVLItem => ({
-      asset: item.asset,
-      tvlUsd: typeof item.tvlUsd === "number" ? item.tvlUsd : 0,
-      tvlAsset: typeof item.tvlAsset === "number" ? item.tvlAsset : 0,
-    });
+    const result: EndurTVLResult = {};
 
-    if (asset) {
-      const match = lsts.find(
-        (i) => i.asset?.toLowerCase() === asset.toLowerCase()
-      );
-      return match ? [mapToTvlItem(match)] : [];
+    for (const item of lsts) {
+      const itemAsset = item.asset;
+      if (!itemAsset) continue;
+      if (
+        !asset ||
+        itemAsset.toLowerCase() === (asset as string).toLowerCase()
+      ) {
+        result[itemAsset] = {
+          tvlUsd: typeof item.tvlUsd === "number" ? item.tvlUsd : 0,
+          tvlAsset: typeof item.tvlAsset === "number" ? item.tvlAsset : 0,
+        };
+        if (asset) break;
+      }
     }
-    return lsts.map(mapToTvlItem);
+    return result;
   }
 
   async deposit(
@@ -241,6 +232,53 @@ export class Endur {
     };
 
     return this.wallet.execute([approveCall, depositCall], options);
+  }
+
+  async depositToValidator(
+    params: {
+      asset: EndurAssetSymbol;
+      amount: Amount;
+      validatorAddress: string;
+    },
+    options?: ExecuteOptions
+  ): Promise<Tx> {
+    const validatorAddr = params.validatorAddress?.trim();
+    if (!validatorAddr) {
+      throw new Error(
+        "depositToValidator requires a non-empty validatorAddress"
+      );
+    }
+
+    const config = this.getLstConfigOrThrow(params.asset);
+
+    if (params.amount.getDecimals() !== config.decimals) {
+      throw new Error(
+        `Amount decimals mismatch: expected ${config.decimals} for ${config.symbol}, got ${params.amount.getDecimals()}`
+      );
+    }
+
+    const token = {
+      name: config.symbol,
+      address: config.assetAddress,
+      decimals: config.decimals,
+      symbol: config.symbol,
+    };
+
+    const approveCall = this.wallet
+      .erc20(token)
+      .populateApprove(config.lstAddress, params.amount);
+
+    const depositToValidatorCall: Call = {
+      contractAddress: config.lstAddress,
+      entrypoint: "deposit_to_validator",
+      calldata: CallData.compile([
+        uint256.bnToUint256(params.amount.toBase()),
+        this.wallet.address,
+        fromAddress(validatorAddr),
+      ]),
+    };
+
+    return this.wallet.execute([approveCall, depositToValidatorCall], options);
   }
 
   /**
