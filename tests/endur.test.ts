@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { uint256 } from "starknet";
 import { fromAddress, Amount, ChainId } from "@/types";
 import type { WalletInterface } from "@/wallet/interface";
 import { Endur, EndurAssetSymbol } from "@/endur";
@@ -306,9 +307,10 @@ describe("Endur", () => {
     it("should call execute with approve and deposit calls", async () => {
       const wallet = createMockWallet();
       const endur = new Endur(wallet);
+      const amount = Amount.parse("100", 18);
 
       const tx = await endur.deposit(
-        { asset: EndurAssetSymbol("STRK"), amount: Amount.parse("100", 18) },
+        { asset: EndurAssetSymbol("STRK"), amount },
         {}
       );
 
@@ -318,6 +320,12 @@ describe("Endur", () => {
       expect(calls).toHaveLength(2);
       expect(calls[0].entrypoint).toBe("approve");
       expect(calls[1].entrypoint).toBe("deposit");
+      const depositCalldata = calls[1].calldata!;
+      const amountFromCalldata = uint256.uint256ToBN({
+        low: BigInt(depositCalldata[0]),
+        high: BigInt(depositCalldata[1]),
+      });
+      expect(amountFromCalldata).toBe(amount.toBase());
       expect(tx.hash).toBe("0xmocktxhash");
     });
 
