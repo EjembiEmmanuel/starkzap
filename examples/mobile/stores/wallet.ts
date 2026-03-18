@@ -3,23 +3,33 @@ import { Alert } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import {
   type AccountClassConfig,
+  Amount,
   ArgentPreset,
   BraavosPreset,
-  DevnetPreset,
-  fromAddress,
-  OpenZeppelinPreset,
-  OnboardStrategy,
-  type StakingConfig,
-  StarkZap,
-  StarkSigner,
-  type WalletInterface,
-  type ChainIdLiteral,
+  BridgeDepositFeeEstimation,
+  type BridgeToken,
   ChainId,
+  type ChainIdLiteral,
+  ConnectedEthereumWallet,
+  ConnectedSolanaWallet,
+  type ConnectExternalWalletOptions,
+  DevnetPreset,
+  Erc20,
+  EthereumBridgeToken,
+  ExternalChain,
+  fromAddress,
+  OnboardStrategy,
+  OpenZeppelinPreset,
+  SolanaBridgeToken,
+  type StakingConfig,
+  StarkSigner,
+  StarkZap,
+  type WalletInterface,
 } from "@starkzap/native";
 import {
+  showCopiedToast,
   showTransactionToast,
   updateTransactionToast,
-  showCopiedToast,
 } from "@/components/Toast";
 
 // Privy server URL - change this to your server URL
@@ -118,6 +128,27 @@ interface WalletState {
   // Logs
   logs: string[];
 
+  // External wallet state (sourced from StarkZap SDK)
+  connectedEthWallet: ConnectedEthereumWallet | undefined;
+  connectedSolWallet: ConnectedSolanaWallet | undefined;
+
+  // Bridge state
+  bridgeDirection: "to-starknet" | "from-starknet";
+  bridgeExternalChain: ExternalChain;
+  bridgeSelectedToken: BridgeToken | null;
+  bridgeDepositBalance: string | null;
+  bridgeDepositBalanceUnit: string | null;
+  bridgeDepositBalanceLoading: boolean;
+  bridgeAllowance: string | null;
+  bridgeAllowanceLoading: boolean;
+  bridgeTokens: BridgeToken[];
+  bridgeIsLoading: boolean;
+  bridgeError: string | null;
+  bridgeLastUpdated: Date | null;
+  bridgeDepositFeeEstimate: BridgeDepositFeeEstimation | null;
+  bridgeDepositFeeLoading: boolean;
+  bridgeFastTransfer: boolean;
+
   // Network configuration actions
   selectNetwork: (index: number) => void;
   selectCustomNetwork: () => void;
@@ -125,6 +156,20 @@ interface WalletState {
   setCustomChainId: (chainId: ChainIdLiteral) => void;
   confirmNetworkConfig: () => void;
   resetNetworkConfig: () => void;
+  connectExternalWallet: (
+    options: ConnectExternalWalletOptions
+  ) => Promise<void>;
+  disconnectExternalWallets: () => void;
+  setBridgeExternalChain: (chain: ExternalChain) => void;
+  toggleBridgeDirection: () => void;
+  selectBridgeToken: (token: BridgeToken | null) => void;
+  fetchBridgeTokens: () => Promise<void>;
+  refreshBridgeTokens: () => Promise<void>;
+  fetchBridgeDepositBalance: () => Promise<void>;
+  fetchBridgeAllowance: () => Promise<void>;
+  fetchBridgeDepositFeeEstimate: () => Promise<void>;
+  setBridgeFastTransfer: (value: boolean) => void;
+  initiateBridge: (amount: string) => Promise<void>;
 
   // Actions
   setPrivateKey: (key: string) => void;
@@ -199,6 +244,23 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   isConnecting: false,
   isCheckingStatus: false,
   logs: [],
+  connectedEthWallet: undefined,
+  connectedSolWallet: undefined,
+  bridgeDirection: "to-starknet",
+  bridgeExternalChain: ExternalChain.ETHEREUM,
+  bridgeSelectedToken: null,
+  bridgeDepositBalance: null,
+  bridgeDepositBalanceUnit: null,
+  bridgeDepositBalanceLoading: false,
+  bridgeAllowance: null,
+  bridgeAllowanceLoading: false,
+  bridgeTokens: [],
+  bridgeIsLoading: false,
+  bridgeError: null,
+  bridgeLastUpdated: null,
+  bridgeDepositFeeEstimate: null,
+  bridgeDepositFeeLoading: false,
+  bridgeFastTransfer: false,
 
   // Network configuration actions
   selectNetwork: (index) => {
@@ -208,6 +270,16 @@ export const useWalletStore = create<WalletState>((set, get) => ({
         selectedNetworkIndex: index,
         rpcUrl: network.rpcUrl,
         chainId: network.chainId,
+        bridgeSelectedToken: null,
+        bridgeDepositBalance: null,
+        bridgeDepositBalanceUnit: null,
+        bridgeAllowance: null,
+        bridgeTokens: [],
+        bridgeError: null,
+        bridgeLastUpdated: null,
+        bridgeDepositFeeEstimate: null,
+        bridgeDepositFeeLoading: false,
+        bridgeFastTransfer: false,
       });
     }
   },
@@ -271,6 +343,16 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       rpcUrl,
       chainId,
       isConfigured: true,
+      bridgeSelectedToken: null,
+      bridgeDepositBalance: null,
+      bridgeDepositBalanceUnit: null,
+      bridgeAllowance: null,
+      bridgeTokens: [],
+      bridgeError: null,
+      bridgeLastUpdated: null,
+      bridgeDepositFeeEstimate: null,
+      bridgeDepositFeeLoading: false,
+      bridgeFastTransfer: false,
       logs: [
         `SDK configured with ${selectedNetworkIndex !== null ? NETWORKS[selectedNetworkIndex].name : "Custom Network"}`,
       ],
@@ -298,8 +380,429 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       selectedNetworkIndex: DEFAULT_NETWORK_INDEX,
       rpcUrl: defaultNetwork.rpcUrl,
       chainId: defaultNetwork.chainId,
+      connectedEthWallet: undefined,
+      connectedSolWallet: undefined,
+      bridgeDirection: "to-starknet",
+      bridgeExternalChain: ExternalChain.ETHEREUM,
+      bridgeSelectedToken: null,
+      bridgeDepositBalance: null,
+      bridgeDepositBalanceUnit: null,
+      bridgeDepositBalanceLoading: false,
+      bridgeAllowance: null,
+      bridgeAllowanceLoading: false,
+      bridgeTokens: [],
+      bridgeIsLoading: false,
+      bridgeError: null,
+      bridgeLastUpdated: null,
+      bridgeDepositFeeEstimate: null,
+      bridgeDepositFeeLoading: false,
+      bridgeFastTransfer: false,
     });
     addLog("Network configuration reset");
+  },
+
+  connectExternalWallet: async (options: ConnectExternalWalletOptions) => {
+    const { chainId, addLog } = get();
+
+    try {
+      if (options.chain === ExternalChain.ETHEREUM) {
+        const wallet = await ConnectedEthereumWallet.from(options, chainId);
+        set({ connectedEthWallet: wallet });
+        addLog(
+          `${options.chain} wallet connected: ${truncateAddress(wallet.address)}`
+        );
+      } else if (options.chain === ExternalChain.SOLANA) {
+        const wallet = await ConnectedSolanaWallet.from(options, chainId);
+        set({ connectedSolWallet: wallet });
+        addLog(
+          `${options.chain} wallet connected: ${truncateAddress(wallet.address)}`
+        );
+      }
+    } catch (err) {
+      addLog(`Failed to connect ${options.chain} wallet: ${err}`);
+      throw err;
+    }
+  },
+
+  disconnectExternalWallets: () => {
+    const { addLog } = get();
+
+    set({
+      connectedEthWallet: undefined,
+      connectedSolWallet: undefined,
+    });
+    addLog("External wallets disconnected");
+  },
+
+  setBridgeExternalChain: (chain) => {
+    const { bridgeExternalChain } = get();
+    if (bridgeExternalChain === chain) return;
+    set({
+      bridgeExternalChain: chain,
+      bridgeSelectedToken: null,
+      bridgeDepositBalance: null,
+      bridgeDepositBalanceUnit: null,
+      bridgeAllowance: null,
+      bridgeTokens: [],
+      bridgeError: null,
+      bridgeLastUpdated: null,
+      bridgeDepositFeeEstimate: null,
+      bridgeDepositFeeLoading: false,
+      bridgeFastTransfer: false,
+    });
+  },
+
+  toggleBridgeDirection: () => {
+    set((state) => ({
+      bridgeDirection:
+        state.bridgeDirection === "to-starknet"
+          ? "from-starknet"
+          : "to-starknet",
+      bridgeDepositBalance: null,
+      bridgeDepositBalanceUnit: null,
+      bridgeAllowance: null,
+      bridgeDepositFeeEstimate: null,
+      bridgeDepositFeeLoading: false,
+      bridgeFastTransfer: false,
+    }));
+  },
+
+  selectBridgeToken: (token) => {
+    set({
+      bridgeSelectedToken: token,
+      bridgeDepositBalance: null,
+      bridgeDepositBalanceUnit: null,
+      bridgeAllowance: null,
+      bridgeDepositFeeEstimate: null,
+      bridgeDepositFeeLoading: false,
+      bridgeFastTransfer: false,
+    });
+  },
+
+  fetchBridgeTokens: async () => {
+    const { sdk, bridgeExternalChain } = get();
+
+    if (!sdk) {
+      return;
+    }
+
+    set({ bridgeIsLoading: true, bridgeError: null });
+
+    try {
+      const bridgeTokens = await sdk.getBridgingTokens(bridgeExternalChain);
+
+      set({
+        bridgeTokens,
+        bridgeIsLoading: false,
+        bridgeError: null,
+        bridgeLastUpdated: new Date(),
+      });
+    } catch (error) {
+      set({
+        bridgeIsLoading: false,
+        bridgeError: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+
+  refreshBridgeTokens: async () => {
+    await get().fetchBridgeTokens();
+  },
+
+  fetchBridgeDepositBalance: async () => {
+    const {
+      sdk,
+      bridgeSelectedToken,
+      bridgeDirection,
+      connectedEthWallet,
+      connectedSolWallet,
+      wallet,
+    } = get();
+
+    const clearBalance = {
+      bridgeDepositBalance: null,
+      bridgeDepositBalanceUnit: null,
+      bridgeDepositBalanceLoading: false,
+    } as const;
+
+    if (!sdk || !bridgeSelectedToken) {
+      set(clearBalance);
+      return;
+    }
+
+    set(clearBalance);
+
+    const externalWallet =
+      bridgeSelectedToken.chain === ExternalChain.ETHEREUM
+        ? connectedEthWallet
+        : connectedSolWallet;
+
+    if (!externalWallet) {
+      set(clearBalance);
+      return;
+    }
+
+    set({ bridgeDepositBalanceLoading: true });
+
+    try {
+      let balance: Amount | null;
+      if (!wallet) {
+        balance = null;
+      } else {
+        if (bridgeDirection === "from-starknet") {
+          const erc20 = new Erc20(
+            {
+              name: bridgeSelectedToken.name,
+              address: bridgeSelectedToken.starknetAddress,
+              decimals: bridgeSelectedToken.decimals,
+              symbol: bridgeSelectedToken.symbol,
+            },
+            sdk.getProvider()
+          );
+
+          balance = await erc20.balanceOf(wallet);
+        } else {
+          if (
+            bridgeSelectedToken.chain === ExternalChain.ETHEREUM &&
+            connectedEthWallet
+          ) {
+            balance = await wallet.getDepositBalance(
+              bridgeSelectedToken as EthereumBridgeToken,
+              connectedEthWallet
+            );
+          } else if (
+            bridgeSelectedToken.chain === ExternalChain.SOLANA &&
+            connectedSolWallet
+          ) {
+            balance = await wallet.getDepositBalance(
+              bridgeSelectedToken as SolanaBridgeToken,
+              connectedSolWallet
+            );
+          } else {
+            balance = null;
+          }
+        }
+      }
+
+      set({
+        bridgeDepositBalance: balance ? balance.toFormatted(true) : null,
+        bridgeDepositBalanceUnit: balance ? balance.toUnit() : null,
+        bridgeDepositBalanceLoading: false,
+      });
+    } catch (error) {
+      console.error("Failed to fetch deposit balance:", error);
+      set(clearBalance);
+    }
+  },
+
+  fetchBridgeAllowance: async () => {
+    const {
+      sdk,
+      wallet,
+      bridgeSelectedToken,
+      bridgeDirection,
+      connectedEthWallet,
+      connectedSolWallet,
+      addLog,
+    } = get();
+
+    if (!sdk || !bridgeSelectedToken || bridgeDirection !== "to-starknet") {
+      set({ bridgeAllowance: null, bridgeAllowanceLoading: false });
+      return;
+    }
+
+    const externalWallet =
+      bridgeSelectedToken.chain === ExternalChain.ETHEREUM
+        ? connectedEthWallet
+        : connectedSolWallet;
+
+    if (!externalWallet || !wallet) {
+      set({ bridgeAllowance: null, bridgeAllowanceLoading: false });
+      return;
+    }
+
+    set({ bridgeAllowanceLoading: true });
+
+    try {
+      let allowance;
+
+      if (
+        bridgeSelectedToken.chain === ExternalChain.ETHEREUM &&
+        connectedEthWallet
+      ) {
+        allowance = await wallet.getAllowance(
+          bridgeSelectedToken as EthereumBridgeToken,
+          connectedEthWallet
+        );
+      } else if (
+        bridgeSelectedToken.chain === ExternalChain.SOLANA &&
+        connectedSolWallet
+      ) {
+        allowance = await wallet.getAllowance(
+          bridgeSelectedToken as SolanaBridgeToken,
+          connectedSolWallet
+        );
+      }
+
+      set({
+        bridgeAllowance: allowance ? allowance.toFormatted(true) : null,
+        bridgeAllowanceLoading: false,
+      });
+    } catch (error) {
+      addLog(`Failed to calculate allowance ${error?.toString()}`);
+      set({ bridgeAllowance: null, bridgeAllowanceLoading: false });
+    }
+  },
+
+  fetchBridgeDepositFeeEstimate: async () => {
+    const {
+      wallet,
+      bridgeSelectedToken,
+      bridgeDirection,
+      connectedEthWallet,
+      connectedSolWallet,
+      bridgeFastTransfer,
+      addLog,
+    } = get();
+
+    if (!wallet || !bridgeSelectedToken || bridgeDirection !== "to-starknet") {
+      set({ bridgeDepositFeeEstimate: null, bridgeDepositFeeLoading: false });
+      return;
+    }
+
+    const isEthereum = bridgeSelectedToken.chain === ExternalChain.ETHEREUM;
+    const isSolana = bridgeSelectedToken.chain === ExternalChain.SOLANA;
+
+    if (
+      (isEthereum && !connectedEthWallet) ||
+      (isSolana && !connectedSolWallet)
+    ) {
+      set({ bridgeDepositFeeEstimate: null, bridgeDepositFeeLoading: false });
+      return;
+    }
+
+    set({ bridgeDepositFeeLoading: true });
+
+    try {
+      let estimate: BridgeDepositFeeEstimation;
+
+      if (isEthereum && connectedEthWallet) {
+        estimate = await wallet.getDepositFeeEstimate(
+          bridgeSelectedToken as EthereumBridgeToken,
+          connectedEthWallet,
+          { fastTransfer: bridgeFastTransfer }
+        );
+      } else if (isSolana && connectedSolWallet) {
+        estimate = await wallet.getDepositFeeEstimate(
+          bridgeSelectedToken as SolanaBridgeToken,
+          connectedSolWallet
+        );
+      } else {
+        set({ bridgeDepositFeeEstimate: null, bridgeDepositFeeLoading: false });
+        return;
+      }
+
+      set({
+        bridgeDepositFeeEstimate: estimate,
+        bridgeDepositFeeLoading: false,
+      });
+    } catch (error) {
+      addLog(`Failed to estimate fees ${error?.toString()}`);
+      set({ bridgeDepositFeeEstimate: null, bridgeDepositFeeLoading: false });
+    }
+  },
+
+  setBridgeFastTransfer: (value: boolean) => {
+    set({ bridgeFastTransfer: value });
+  },
+
+  initiateBridge: async (amount: string) => {
+    const {
+      sdk,
+      bridgeSelectedToken,
+      bridgeDirection,
+      bridgeFastTransfer,
+      wallet,
+      connectedEthWallet,
+      connectedSolWallet,
+      addLog,
+    } = get();
+
+    if (!sdk || !bridgeSelectedToken) {
+      Alert.alert("Error", "Please select a token first.");
+      return;
+    }
+
+    if (bridgeDirection === "to-starknet") {
+      const externalWallet =
+        bridgeSelectedToken.chain === ExternalChain.ETHEREUM
+          ? connectedEthWallet
+          : connectedSolWallet;
+
+      if (!externalWallet) {
+        Alert.alert("Error", "Please connect your external wallet first.");
+        return;
+      }
+
+      if (!wallet) {
+        Alert.alert(
+          "Error",
+          "Please connect your Starknet wallet to receive funds."
+        );
+        return;
+      }
+
+      addLog(
+        `Bridge deposit: ${amount} ${bridgeSelectedToken.symbol} → Starknet`
+      );
+
+      try {
+        const depositAmount = Amount.parse(
+          amount,
+          bridgeSelectedToken.decimals,
+          bridgeSelectedToken.symbol
+        );
+
+        if (
+          bridgeSelectedToken.chain === ExternalChain.ETHEREUM &&
+          connectedEthWallet
+        ) {
+          const txResponse = await wallet.deposit(
+            wallet.address,
+            depositAmount,
+            bridgeSelectedToken as EthereumBridgeToken,
+            connectedEthWallet,
+            { fastTransfer: bridgeFastTransfer }
+          );
+          addLog(`Deposit tx sent: ${txResponse.hash}`);
+        } else if (
+          bridgeSelectedToken.chain === ExternalChain.SOLANA &&
+          connectedSolWallet
+        ) {
+          const txResponse = await wallet.deposit(
+            wallet.address,
+            depositAmount,
+            bridgeSelectedToken as SolanaBridgeToken,
+            connectedSolWallet
+          );
+          addLog(`Deposit tx sent: ${txResponse.hash}`);
+        }
+      } catch (err) {
+        const errStr = String(err);
+        addLog(`Deposit failed: ${errStr}`);
+        Alert.alert("Deposit Failed", errStr);
+      }
+    } else {
+      if (!wallet) {
+        Alert.alert("Error", "Please connect your Starknet wallet first.");
+        return;
+      }
+
+      // TODO: Implement withdrawal from Starknet
+      addLog(
+        `Bridge withdrawal: ${amount} ${bridgeSelectedToken.symbol} → ${bridgeSelectedToken.chain}`
+      );
+    }
   },
 
   // Actions

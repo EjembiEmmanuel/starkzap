@@ -1,4 +1,4 @@
-import { validateAndParseAddress, type BigNumberish } from "starknet";
+import { type BigNumberish, validateAndParseAddress } from "starknet";
 
 /**
  * Branded type for Starknet addresses.
@@ -32,3 +32,21 @@ export function resolveWalletAddress(value: AddressInput): Address {
 
   return fromAddress(value);
 }
+
+/**
+ * Branded type for Ethereum addresses.
+ *
+ * This provides compile-time type safety to distinguish addresses from
+ * regular strings, while remaining a string at runtime.
+ */
+export type EthereumAddress = string & { readonly __type: "EthereumAddress" };
+
+/**
+ * Branded type for Solana addresses.
+ *
+ * This provides compile-time type safety to distinguish addresses from
+ * regular strings, while remaining a string at runtime.
+ */
+export type SolanaAddress = string & { readonly __type: "SolanaAddress" };
+
+export type ExternalAddress = EthereumAddress | SolanaAddress;
