@@ -8,25 +8,24 @@ import {
   getSupportedAssetSymbols,
   type EndurLstConfig,
 } from "@/endur/presets";
+import type { ChainId } from "@/types/config";
 
-/** Endur API base URL (same for mainnet and testnet). */
-const ENDUR_API_BASE = "https://app.endur.fi";
+const ENDUR_API_BASES: Record<string, string> = {
+  SN_MAIN: "https://app.endur.fi",
+  SN_SEPOLIA: "https://testnet.endur.fi",
+};
+
+function getEndurApiBase(chainId: ChainId): string {
+  const literal = chainId.toLiteral();
+  return ENDUR_API_BASES[literal] ?? "https://app.endur.fi";
+}
 
 declare const EndurAssetSymbolBrand: unique symbol;
 
-/**
- * Branded type for Endur LST asset symbols (e.g. STRK, WBTC, tBTC).
- * Use EndurAssetSymbol.from() to create from a string.
- */
 export type EndurAssetSymbol = string & {
   readonly [EndurAssetSymbolBrand]: true;
 };
 
-/**
- * Create an EndurAssetSymbol from a string.
- * @param symbol - Asset symbol (e.g. "STRK", "WBTC")
- * @throws Error if symbol is empty or not a string
- */
 export function EndurAssetSymbol(symbol: string): EndurAssetSymbol {
   const s = typeof symbol === "string" ? symbol.trim() : "";
   if (!s) {
@@ -89,7 +88,8 @@ export class Endur {
   private async fetchLstStats(): Promise<EndurLstStatsItem[]> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    const lstRes = await this.fetcher(`${ENDUR_API_BASE}/api/lst/stats`, {
+    const apiBase = getEndurApiBase(this.wallet.getChainId());
+    const lstRes = await this.fetcher(`${apiBase}/api/lst/stats`, {
       signal: controller.signal,
     }).finally(() => clearTimeout(timer));
     if (!lstRes.ok) {
