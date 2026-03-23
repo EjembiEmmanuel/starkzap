@@ -126,6 +126,11 @@ export class Troves {
         calls.push(normalizeCalldata(raw));
       }
     }
+    if (calls.length === 0) {
+      throw new Error(
+        `Troves deposit API returned results with no calls for strategy "${params.strategyId}"`
+      );
+    }
     return calls;
   }
 
@@ -161,6 +166,11 @@ export class Troves {
       for (const raw of result.calls) {
         calls.push(normalizeCalldata(raw));
       }
+    }
+    if (calls.length === 0) {
+      throw new Error(
+        `Troves withdraw API returned results with no calls for strategy "${params.strategyId}"`
+      );
     }
     return calls;
   }

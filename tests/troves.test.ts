@@ -242,6 +242,43 @@ describe("Troves", () => {
         'Troves deposit API returned no calls for strategy "evergreen_strk"'
       );
     });
+
+    it("should throw when API returns results with empty calls after flattening", async () => {
+      const wallet = createMockWallet();
+      const fetcher = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            success: true,
+            results: [
+              {
+                tokenInfo: {
+                  symbol: "STRK",
+                  name: "Starknet",
+                  address: "0x123",
+                  decimals: 18,
+                },
+                calls: [],
+              },
+            ],
+            strategyId: "evergreen_strk",
+            isDeposit: true,
+          }),
+      });
+
+      const troves = new Troves(wallet as never, {
+        fetcher: fetcher as typeof fetch,
+      });
+
+      await expect(
+        troves.populateDepositCalls({
+          strategyId: "evergreen_strk",
+          amountRaw: "1000000000000000000",
+        })
+      ).rejects.toThrow(
+        'Troves deposit API returned results with no calls for strategy "evergreen_strk"'
+      );
+    });
   });
 
   describe("populateWithdrawCalls", () => {
@@ -298,6 +335,43 @@ describe("Troves", () => {
       );
       expect(calls).toHaveLength(1);
       expect(calls[0]?.entrypoint).toBe("redeem");
+    });
+
+    it("should throw when API returns results with empty calls after flattening", async () => {
+      const wallet = createMockWallet();
+      const fetcher = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            success: true,
+            results: [
+              {
+                tokenInfo: {
+                  symbol: "STRK",
+                  name: "Starknet",
+                  address: "0x123",
+                  decimals: 18,
+                },
+                calls: [],
+              },
+            ],
+            strategyId: "evergreen_strk",
+            isDeposit: false,
+          }),
+      });
+
+      const troves = new Troves(wallet as never, {
+        fetcher: fetcher as typeof fetch,
+      });
+
+      await expect(
+        troves.populateWithdrawCalls({
+          strategyId: "evergreen_strk",
+          amountRaw: "1000000000000000000",
+        })
+      ).rejects.toThrow(
+        'Troves withdraw API returned results with no calls for strategy "evergreen_strk"'
+      );
     });
   });
 
