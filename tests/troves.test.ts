@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Call, ExecuteOptions } from "starknet";
-import { fromAddress } from "@/types";
+import type { Call } from "starknet";
+import { fromAddress, type ExecuteOptions } from "@/types";
 import { Troves } from "@/troves";
 import type { Tx } from "@/tx";
 
