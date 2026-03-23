@@ -1,6 +1,6 @@
 import type { Call } from "starknet";
 import type { WalletInterface } from "@/wallet/interface";
-import type { ExecuteOptions } from "@/types";
+import { fromAddress, type ExecuteOptions } from "@/types";
 import type { Tx } from "@/tx";
 import type {
   TrovesStrategiesResponse,
@@ -16,10 +16,44 @@ export interface TrovesOptions {
   timeoutMs?: number;
 }
 
-/**
- * Validates `discontinuationInfo.date` strings after JSON parse; use `new Date(date)`
- * at call sites when a `Date` is needed.
- */
+function normalizeTrovesStrategiesResponse(
+  data: TrovesStrategiesResponse
+): TrovesStrategiesResponse {
+  return {
+    ...data,
+    strategies: data.strategies.map((s) => ({
+      ...s,
+      depositToken: s.depositToken.map((t) => ({
+        ...t,
+        address: fromAddress(t.address),
+      })),
+      contract: s.contract.map((c) => ({
+        ...c,
+        address: fromAddress(c.address),
+      })),
+    })),
+  };
+}
+
+function normalizeTrovesDepositCallsResponse(
+  data: TrovesDepositCallsResponse
+): TrovesDepositCallsResponse {
+  return {
+    ...data,
+    results: data.results.map((r) => ({
+      ...r,
+      tokenInfo: {
+        ...r.tokenInfo,
+        address: fromAddress(r.tokenInfo.address),
+      },
+      calls: r.calls.map((c) => ({
+        ...c,
+        contractAddress: fromAddress(c.contractAddress),
+      })),
+    })),
+  };
+}
+
 function validateStrategiesDiscontinuationDates(
   data: TrovesStrategiesResponse
 ): void {
@@ -112,7 +146,7 @@ export class Troves {
       : "/api/strategies";
     const data = await this.fetchJson<TrovesStrategiesResponse>(path);
     validateStrategiesDiscontinuationDates(data);
-    return data;
+    return normalizeTrovesStrategiesResponse(data);
   }
 
   async getStats(): Promise<TrovesStatsResponse> {
@@ -133,13 +167,12 @@ export class Troves {
       isDeposit: true,
       address,
     };
-    const data = await this.fetchJson<TrovesDepositCallsResponse>(
-      "/api/deposits/calls",
-      {
+    const data = normalizeTrovesDepositCallsResponse(
+      await this.fetchJson<TrovesDepositCallsResponse>("/api/deposits/calls", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-      }
+      })
     );
     if (!data.success || !data.results?.length) {
       throw new Error(
@@ -174,13 +207,12 @@ export class Troves {
       isDeposit: false,
       address,
     };
-    const data = await this.fetchJson<TrovesDepositCallsResponse>(
-      "/api/deposits/calls",
-      {
+    const data = normalizeTrovesDepositCallsResponse(
+      await this.fetchJson<TrovesDepositCallsResponse>("/api/deposits/calls", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-      }
+      })
     );
     if (!data.success || !data.results?.length) {
       throw new Error(

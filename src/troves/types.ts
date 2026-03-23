@@ -1,7 +1,9 @@
+import type { Address } from "@/types/address";
+
 export interface TrovesDepositToken {
   symbol: string;
   name: string;
-  address: string;
+  address: Address;
   decimals: number;
   logo?: string;
 }
@@ -18,7 +20,7 @@ export interface TrovesStrategyAPIResult {
   leverage: number;
   contract: Array<{
     name: string;
-    address: string;
+    address: Address;
   }>;
   tvlUsd: number;
   status: {
@@ -62,7 +64,7 @@ export interface TrovesStatsResponse {
 }
 
 export interface TrovesRawCall {
-  contractAddress: string;
+  contractAddress: Address;
   entrypoint: string;
   calldata: (string | number | boolean)[];
 }
@@ -70,7 +72,7 @@ export interface TrovesRawCall {
 export interface TrovesCallTokenInfo {
   symbol: string;
   name: string;
-  address: string;
+  address: Address;
   decimals: number;
 }
 

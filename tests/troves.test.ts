@@ -73,6 +73,12 @@ describe("Troves", () => {
       expect(result.status).toBe(true);
       expect(result.strategies).toHaveLength(1);
       expect(result.strategies[0]?.id).toBe("evergreen_strk");
+      expect(result.strategies[0]?.depositToken[0]?.address).toBe(
+        fromAddress("0x123")
+      );
+      expect(result.strategies[0]?.contract[0]?.address).toBe(
+        fromAddress("0xabc")
+      );
     });
 
     it("should append no_cache=true when requested", async () => {
@@ -205,12 +211,12 @@ describe("Troves", () => {
       );
       expect(calls).toHaveLength(2);
       expect(calls[0]).toEqual({
-        contractAddress: "0xabc",
+        contractAddress: fromAddress("0xabc"),
         entrypoint: "approve",
         calldata: ["0xdef", "1000000000000000000"],
       });
       expect(calls[1]).toEqual({
-        contractAddress: "0xdef",
+        contractAddress: fromAddress("0xdef"),
         entrypoint: "deposit",
         calldata: ["1000000000000000000", MOCK_ADDRESS],
       });
