@@ -40,7 +40,7 @@ export interface TrovesStrategyAPIResult {
   isDeprecated?: boolean;
   lastAumUpdate?: string;
   discontinuationInfo?: {
-    date?: Date;
+    date?: string;
     reason?: unknown;
     info?: unknown;
   };

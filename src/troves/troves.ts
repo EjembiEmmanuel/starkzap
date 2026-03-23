@@ -16,6 +16,30 @@ export interface TrovesOptions {
   timeoutMs?: number;
 }
 
+/**
+ * Validates `discontinuationInfo.date` strings after JSON parse; use `new Date(date)`
+ * at call sites when a `Date` is needed.
+ */
+function validateStrategiesDiscontinuationDates(
+  data: TrovesStrategiesResponse
+): void {
+  for (const s of data.strategies) {
+    const raw = s.discontinuationInfo?.date;
+    if (raw === undefined || raw === null) continue;
+    if (typeof raw !== "string") {
+      throw new Error(
+        `Troves API returned invalid discontinuationInfo.date type for strategy "${s.id}"`
+      );
+    }
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error(
+        `Troves API returned invalid discontinuationInfo.date for strategy "${s.id}"`
+      );
+    }
+  }
+}
+
 function normalizeCalldata(raw: TrovesRawCall): Call {
   const calldata = Array.isArray(raw.calldata)
     ? raw.calldata.map((v: unknown) => {
@@ -86,7 +110,9 @@ export class Troves {
     const path = options?.noCache
       ? "/api/strategies?no_cache=true"
       : "/api/strategies";
-    return this.fetchJson<TrovesStrategiesResponse>(path);
+    const data = await this.fetchJson<TrovesStrategiesResponse>(path);
+    validateStrategiesDiscontinuationDates(data);
+    return data;
   }
 
   async getStats(): Promise<TrovesStatsResponse> {
