@@ -15,6 +15,7 @@ import type { SignerInterface } from "@/signer";
 import type {
   Address,
   AccountClassConfig,
+  BridgingConfig,
   DeployOptions,
   EnsureReadyOptions,
   ExecuteOptions,
@@ -27,6 +28,7 @@ import type {
   StakingConfig,
 } from "@/types";
 import type { SwapProvider } from "@/swap";
+import type { DcaProvider } from "@/dca";
 import {
   checkDeployed,
   ensureWalletReady,
@@ -71,6 +73,10 @@ export interface WalletOptions {
   swapProviders?: SwapProvider[];
   /** Optional default swap provider id (must be registered) */
   defaultSwapProviderId?: string;
+  /** Optional additional DCA providers to register on this wallet */
+  dcaProviders?: DcaProvider[];
+  /** Optional default DCA provider id (must be registered) */
+  defaultDcaProviderId?: string;
 }
 
 /**
@@ -103,6 +109,7 @@ interface WalletInternals {
   defaultFeeMode: FeeMode;
   defaultTimeBounds?: PaymasterTimeBounds;
   stakingConfig: StakingConfig | undefined;
+  bridgingConfig?: BridgingConfig | undefined;
 }
 
 export class Wallet extends BaseWallet {
@@ -120,7 +127,11 @@ export class Wallet extends BaseWallet {
   private sponsoredDeployLock: Promise<void> | null = null;
 
   private constructor(options: WalletInternals) {
-    super(options.address, options.stakingConfig);
+    super({
+      address: options.address,
+      stakingConfig: options.stakingConfig,
+      bridgingConfig: options.bridgingConfig,
+    });
     this.accountProvider = options.accountProvider;
     this.account = options.account;
     this.provider = options.provider;
@@ -161,6 +172,8 @@ export class Wallet extends BaseWallet {
       timeBounds,
       swapProviders,
       defaultSwapProviderId,
+      dcaProviders,
+      defaultDcaProviderId,
     } = options;
 
     // Build or use provided AccountProvider
@@ -205,6 +218,7 @@ export class Wallet extends BaseWallet {
       defaultFeeMode: feeMode,
       ...(timeBounds && { defaultTimeBounds: timeBounds }),
       stakingConfig: options.config.staking,
+      bridgingConfig: options.config.bridging,
     });
 
     if (swapProviders?.length) {
@@ -214,6 +228,14 @@ export class Wallet extends BaseWallet {
     }
     if (defaultSwapProviderId) {
       wallet.setDefaultSwapProvider(defaultSwapProviderId);
+    }
+    if (dcaProviders?.length) {
+      for (const dcaProvider of dcaProviders) {
+        wallet.dca().registerProvider(dcaProvider);
+      }
+    }
+    if (defaultDcaProviderId) {
+      wallet.dca().setDefaultProvider(defaultDcaProviderId);
     }
 
     return wallet;

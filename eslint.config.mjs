@@ -22,8 +22,7 @@ export default defineConfig(
       "docs/api/**",
       "docs/export/**",
       "examples/flappy-bird/**",
-      "examples/mobile/eslint.config.js",
-      "examples/mobile/metro.config.js",
+      "examples/mobile/**",
       "external/**",
     ],
   },
@@ -34,6 +33,24 @@ export default defineConfig(
         console: "readonly",
         process: "readonly",
       },
+    },
+  },
+  {
+    files: ["packages/native/metro.cjs"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: {
+        require: "readonly",
+        module: "readonly",
+        exports: "readonly",
+        __dirname: "readonly",
+        __filename: "readonly",
+        console: "readonly",
+        process: "readonly",
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
     },
   },
   {

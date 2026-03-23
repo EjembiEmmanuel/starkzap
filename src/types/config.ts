@@ -151,6 +151,35 @@ export interface StakingConfig {
 }
 
 /**
+ * Configuration for cross-chain bridging features.
+ *
+ * @example
+ * ```ts
+ * const sdk = new StarkZap({
+ *   network: "mainnet",
+ *   bridging: {
+ *     layerZeroApiKey: "your-api-key",
+ *   },
+ * });
+ * ```
+ */
+export interface BridgingConfig {
+  /**
+   * LayerZero API key for OFT bridge support.
+   *
+   * Required only when bridging OFT tokens. The LayerZero Value Transfer API
+   * is mainnet-only -- OFT bridging is not available on testnets.
+   */
+  layerZeroApiKey?: string;
+
+  /** Custom Ethereum JSON-RPC endpoint used for gas estimation in Ethereum bridges. */
+  ethereumRpcUrl?: string;
+
+  /** Custom Solana RPC endpoint. Falls back to the public cluster URL if omitted. */
+  solanaRpcUrl?: string;
+}
+
+/**
  * Main configuration for the StarkZap.
  *
  * You can configure using a network preset or custom rpcUrl/chainId.
@@ -201,4 +230,13 @@ export interface SDKConfig {
    * @see {@link StakingConfig}
    */
   staking?: StakingConfig;
+
+  /**
+   * Optional: configuration for cross-chain bridging.
+   *
+   * Required when using OFT (LayerZero) bridge tokens.
+   *
+   * @see {@link BridgingConfig}
+   */
+  bridging?: BridgingConfig;
 }

@@ -91,6 +91,18 @@ const lendingRepayCall: Call = {
   calldata: [4, 5, 6],
 };
 
+const dcaCreateCall: Call = {
+  contractAddress: fromAddress("0x601"),
+  entrypoint: "open_dca",
+  calldata: [7, 8, 9],
+};
+
+const dcaCancelCall: Call = {
+  contractAddress: fromAddress("0x602"),
+  entrypoint: "cancel_dca",
+  calldata: [10, 11, 12],
+};
+
 // ─── Mock helpers ────────────────────────────────────────────────────────────
 
 function createMockErc20(token: Token) {
@@ -150,11 +162,19 @@ function createMockWallet(
       calls: [lendingRepayCall],
     }),
   };
+  const mockDca = {
+    prepareCreate: vi.fn().mockResolvedValue({
+      calls: [dcaCreateCall],
+    }),
+    prepareCancel: vi.fn().mockResolvedValue({
+      calls: [dcaCancelCall],
+    }),
+  };
   const defaultSwapProvider: SwapProvider = {
     id: "default",
     supportsChain: () => true,
     getQuote: vi.fn(),
-    swap: vi.fn().mockResolvedValue({
+    prepareSwap: vi.fn().mockResolvedValue({
       calls: [rawCall],
       quote: {
         amountInBase: 1n,
@@ -162,6 +182,13 @@ function createMockWallet(
       },
     }),
   };
+  const prepareSwap = vi.fn().mockResolvedValue({
+    calls: [rawCall],
+    quote: {
+      amountInBase: 1n,
+      amountOutBase: 2n,
+    },
+  });
 
   return {
     address: fromAddress("0x0A11E7"),
@@ -175,9 +202,11 @@ function createMockWallet(
     }),
     staking: vi.fn().mockResolvedValue(mockStaking),
     lending: vi.fn().mockReturnValue(mockLending),
+    dca: vi.fn().mockReturnValue(mockDca),
     getChainId: vi.fn().mockReturnValue(ChainId.SEPOLIA),
     getDefaultSwapProvider: vi.fn().mockReturnValue(defaultSwapProvider),
-    getSwapProvider: vi.fn(),
+    getSwapProvider: vi.fn().mockReturnValue(defaultSwapProvider),
+    prepareSwap,
     execute: vi.fn().mockResolvedValue({ hash: "0xtxhash" }),
     estimateFee: vi.fn().mockResolvedValue({ overall_fee: 1000n }),
     ...overrides,
@@ -210,7 +239,7 @@ describe("TxBuilder", () => {
               amountInBase: 1n,
               amountOutBase: 2n,
             }),
-            swap: vi.fn().mockResolvedValue({
+            prepareSwap: vi.fn().mockResolvedValue({
               calls: [rawCall],
               quote: { amountInBase: 1n, amountOutBase: 2n },
             }),
@@ -250,6 +279,16 @@ describe("TxBuilder", () => {
           amount,
         } as unknown)
       ).toBe(builder);
+      expect(
+        builder.dcaCreate({
+          sellToken: mockUSDC,
+          buyToken: mockSTRK,
+          sellAmount: amount,
+          sellAmountPerCycle: Amount.parse("10", mockUSDC),
+          frequency: "P1D",
+        })
+      ).toBe(builder);
+      expect(builder.dcaCancel({ orderAddress: "0x123" })).toBe(builder);
     });
   });
 
@@ -374,7 +413,7 @@ describe("TxBuilder", () => {
   });
 
   describe("swap", () => {
-    it("should resolve swap calls via wallet default provider", async () => {
+    it("should resolve swap calls via wallet.prepareSwap", async () => {
       const swapCalls: Call[] = [
         {
           contractAddress: fromAddress("0x999"),
@@ -382,246 +421,101 @@ describe("TxBuilder", () => {
           calldata: [1, 2, 3],
         },
       ];
-      const defaultProvider: SwapProvider = {
-        id: "avnu",
-        supportsChain: () => true,
-        getQuote: vi.fn(),
-        swap: vi.fn().mockResolvedValue({
-          calls: swapCalls,
-          quote: {
-            amountInBase: 1n,
-            amountOutBase: 2n,
-          },
-        }),
-      };
-      const request = {
-        tokenIn: mockUSDC,
-        tokenOut: mockSTRK,
-        amountIn: Amount.parse("1", mockSTRK),
-      };
-      const wallet = createMockWallet({
-        getDefaultSwapProvider: vi.fn().mockReturnValue(defaultProvider),
-      });
-
-      const calls = await new TxBuilder(wallet).swap(request).calls();
-
-      expect(wallet.getDefaultSwapProvider).toHaveBeenCalledTimes(1);
-      expect(defaultProvider.swap).toHaveBeenCalledWith({
-        ...request,
-        chainId: ChainId.SEPOLIA,
-        takerAddress: wallet.address,
-      });
-      expect(calls).toEqual(swapCalls);
-    });
-
-    it("should resolve provider swap calls", async () => {
-      const swapCalls: Call[] = [
-        {
-          contractAddress: fromAddress("0x999"),
-          entrypoint: "swap",
-          calldata: [1, 2, 3],
-        },
-      ];
-      const provider: SwapProvider = {
-        id: "avnu",
-        supportsChain: () => true,
-        getQuote: vi.fn(),
-        swap: vi.fn().mockResolvedValue({
-          calls: swapCalls,
-          quote: {
-            amountInBase: 1n,
-            amountOutBase: 2n,
-          },
-        }),
-      };
-      const request = {
-        provider,
-        chainId: { toLiteral: () => "SN_SEPOLIA" } as unknown,
-        tokenIn: mockUSDC,
-        tokenOut: mockSTRK,
-        amountIn: Amount.parse("1", mockSTRK),
-      };
-      const wallet = createMockWallet();
-
-      const calls = await new TxBuilder(wallet).swap(request).calls();
-
-      expect(provider.swap).toHaveBeenCalledWith({
-        chainId: request.chainId,
-        tokenIn: request.tokenIn,
-        tokenOut: request.tokenOut,
-        amountIn: request.amountIn,
-        takerAddress: wallet.address,
-      });
-      expect(calls).toEqual(swapCalls);
-    });
-
-    it("should resolve provider id via wallet.getSwapProvider", async () => {
-      const swapCalls: Call[] = [
-        {
-          contractAddress: fromAddress("0x999"),
-          entrypoint: "swap",
-          calldata: [1, 2, 3],
-        },
-      ];
-      const provider: SwapProvider = {
-        id: "ekubo",
-        supportsChain: () => true,
-        getQuote: vi.fn(),
-        swap: vi.fn().mockResolvedValue({
-          calls: swapCalls,
-          quote: {
-            amountInBase: 1n,
-            amountOutBase: 2n,
-          },
-        }),
-      };
       const request = {
         provider: "ekubo",
-        chainId: { toLiteral: () => "SN_SEPOLIA" } as unknown,
+        chainId: ChainId.SEPOLIA,
         tokenIn: mockUSDC,
         tokenOut: mockSTRK,
-        amountIn: Amount.parse("1", mockSTRK),
+        amountIn: Amount.parse("1", mockUSDC),
       };
       const wallet = createMockWallet({
-        getSwapProvider: vi.fn().mockReturnValue(provider),
-      });
-
-      const calls = await new TxBuilder(wallet).swap(request).calls();
-
-      expect(wallet.getSwapProvider).toHaveBeenCalledWith("ekubo");
-      expect(provider.swap).toHaveBeenCalledWith({
-        chainId: request.chainId,
-        tokenIn: request.tokenIn,
-        tokenOut: request.tokenOut,
-        amountIn: request.amountIn,
-        takerAddress: wallet.address,
-      });
-      expect(calls).toEqual(swapCalls);
-    });
-
-    it("should auto-fill request chainId and takerAddress from wallet", async () => {
-      const swapCalls: Call[] = [
-        {
-          contractAddress: fromAddress("0x999"),
-          entrypoint: "swap",
-          calldata: [1, 2, 3],
-        },
-      ];
-      const provider: SwapProvider = {
-        id: "avnu",
-        supportsChain: () => true,
-        getQuote: vi.fn(),
-        swap: vi.fn().mockResolvedValue({
+        prepareSwap: vi.fn().mockResolvedValue({
           calls: swapCalls,
           quote: {
             amountInBase: 1n,
             amountOutBase: 2n,
           },
         }),
-      };
-      const request = {
-        provider,
-        tokenIn: mockUSDC,
-        tokenOut: mockSTRK,
-        amountIn: Amount.parse("1", mockSTRK),
-      };
-      const wallet = createMockWallet();
+      });
 
       const calls = await new TxBuilder(wallet).swap(request).calls();
 
-      expect(provider.swap).toHaveBeenCalledWith({
-        chainId: ChainId.SEPOLIA,
-        tokenIn: request.tokenIn,
-        tokenOut: request.tokenOut,
-        amountIn: request.amountIn,
-        takerAddress: wallet.address,
-      });
+      expect(wallet.prepareSwap).toHaveBeenCalledWith(request);
       expect(calls).toEqual(swapCalls);
     });
 
-    it("should propagate provider swap failures", async () => {
-      const provider: SwapProvider = {
-        id: "avnu",
-        supportsChain: () => true,
-        getQuote: vi.fn(),
-        swap: vi.fn().mockRejectedValue(new Error("invalid swap payload")),
-      };
+    it("should pass the original swap request through unchanged", async () => {
       const request = {
-        provider,
-        chainId: { toLiteral: () => "SN_SEPOLIA" } as unknown,
         tokenIn: mockUSDC,
         tokenOut: mockSTRK,
-        amountIn: Amount.parse("1", mockSTRK),
+        amountIn: Amount.parse("1", mockUSDC),
       };
       const wallet = createMockWallet();
+
+      await new TxBuilder(wallet).swap(request).calls();
+
+      expect(wallet.prepareSwap).toHaveBeenCalledWith(request);
+    });
+
+    it("should fail fast for invalid swap providers without mutating the builder", () => {
+      const request = {
+        provider: "missing",
+        tokenIn: mockUSDC,
+        tokenOut: mockSTRK,
+        amountIn: Amount.parse("1", mockUSDC),
+      } as const;
+      const wallet = createMockWallet({
+        getSwapProvider: vi.fn().mockImplementation(() => {
+          throw new Error(
+            'Unknown swap provider "missing". Registered providers: default'
+          );
+        }),
+      });
+      const builder = new TxBuilder(wallet);
+
+      expect(() => builder.swap(request)).toThrow(
+        'Unknown swap provider "missing". Registered providers: default'
+      );
+      expect(builder.length).toBe(0);
+      expect(wallet.prepareSwap).not.toHaveBeenCalled();
+    });
+
+    it("should propagate wallet.prepareSwap failures", async () => {
+      const request = {
+        tokenIn: mockUSDC,
+        tokenOut: mockSTRK,
+        amountIn: Amount.parse("1", mockUSDC),
+      };
+      const wallet = createMockWallet({
+        prepareSwap: vi
+          .fn()
+          .mockRejectedValue(new Error("invalid swap payload")),
+      });
 
       await expect(new TxBuilder(wallet).swap(request).calls()).rejects.toThrow(
         "invalid swap payload"
       );
     });
 
-    it("should throw when provider swap returns no calls", async () => {
-      const provider: SwapProvider = {
-        id: "avnu",
-        supportsChain: () => true,
-        getQuote: vi.fn(),
-        swap: vi.fn().mockResolvedValue({
+    it("should throw when wallet.prepareSwap returns no calls", async () => {
+      const request = {
+        tokenIn: mockUSDC,
+        tokenOut: mockSTRK,
+        amountIn: Amount.parse("1", mockUSDC),
+      };
+      const wallet = createMockWallet({
+        prepareSwap: vi.fn().mockResolvedValue({
           calls: [],
           quote: {
             amountInBase: 1n,
             amountOutBase: 2n,
           },
         }),
-      };
-      const request = {
-        provider,
-        chainId: { toLiteral: () => "SN_SEPOLIA" } as unknown,
-        tokenIn: mockUSDC,
-        tokenOut: mockSTRK,
-        amountIn: Amount.parse("1", mockSTRK),
-      };
-      const wallet = createMockWallet();
-
-      await expect(new TxBuilder(wallet).swap(request).calls()).rejects.toThrow(
-        'Swap provider "avnu" returned no calls'
-      );
-    });
-
-    it("should throw on wallet/request chain mismatch", async () => {
-      const provider: SwapProvider = {
-        id: "avnu",
-        supportsChain: () => true,
-        getQuote: vi.fn(),
-        swap: vi.fn(),
-      };
-      const wallet = createMockWallet();
-
-      expect(() =>
-        new TxBuilder(wallet).swap({
-          provider,
-          chainId: ChainId.MAINNET,
-          tokenIn: mockUSDC,
-          tokenOut: mockSTRK,
-          amountIn: Amount.parse("1", mockSTRK),
-        })
-      ).toThrow("does not match wallet chain");
-    });
-
-    it("should not treat empty provider id as default provider", () => {
-      const wallet = createMockWallet({
-        getSwapProvider: vi.fn().mockImplementation((providerId: string) => {
-          throw new Error(`Unknown swap provider "${providerId}"`);
-        }),
       });
 
-      expect(() =>
-        new TxBuilder(wallet).swap({
-          provider: "",
-          tokenIn: mockUSDC,
-          tokenOut: mockSTRK,
-          amountIn: Amount.parse("1", mockSTRK),
-        })
-      ).toThrow('Unknown swap provider ""');
+      await expect(new TxBuilder(wallet).swap(request).calls()).rejects.toThrow(
+        "Swap returned no calls"
+      );
     });
   });
 
@@ -729,6 +623,80 @@ describe("TxBuilder", () => {
           })
           .calls()
       ).rejects.toThrow('Lending action "withdrawMax" returned no calls');
+    });
+  });
+
+  describe("dca", () => {
+    it("should resolve DCA create calls via wallet.dca()", async () => {
+      const wallet = createMockWallet();
+      const dcaManager = wallet.dca();
+      (wallet.dca as ReturnType<typeof vi.fn>).mockClear();
+      const sellAmount = Amount.parse("100", mockUSDC);
+      const sellAmountPerCycle = Amount.parse("10", mockUSDC);
+      const request = {
+        sellToken: mockUSDC,
+        buyToken: mockSTRK,
+        sellAmount,
+        sellAmountPerCycle,
+        frequency: "P1D",
+      };
+
+      const calls = await new TxBuilder(wallet).dcaCreate(request).calls();
+
+      expect(wallet.dca).toHaveBeenCalledTimes(1);
+      expect(dcaManager.prepareCreate).toHaveBeenCalledWith(request);
+      expect(calls).toEqual([dcaCreateCall]);
+    });
+
+    it("should resolve DCA cancel calls via wallet.dca()", async () => {
+      const wallet = createMockWallet();
+      const dcaManager = wallet.dca();
+      (wallet.dca as ReturnType<typeof vi.fn>).mockClear();
+      const request = { orderAddress: "0x123" };
+
+      const calls = await new TxBuilder(wallet).dcaCancel(request).calls();
+
+      expect(wallet.dca).toHaveBeenCalledTimes(1);
+      expect(dcaManager.prepareCancel).toHaveBeenCalledWith(request);
+      expect(calls).toEqual([dcaCancelCall]);
+    });
+
+    it("should throw when DCA create returns no calls", async () => {
+      const wallet = createMockWallet({
+        dca: vi.fn().mockReturnValue({
+          prepareCreate: vi.fn().mockResolvedValue({ calls: [] }),
+          prepareCancel: vi.fn(),
+        }),
+      });
+
+      await expect(
+        new TxBuilder(wallet)
+          .dcaCreate({
+            sellToken: mockUSDC,
+            buyToken: mockSTRK,
+            sellAmount: Amount.parse("100", mockUSDC),
+            sellAmountPerCycle: Amount.parse("10", mockUSDC),
+            frequency: "P1D",
+          })
+          .calls()
+      ).rejects.toThrow('DCA action "create" returned no calls');
+    });
+
+    it("should throw when DCA cancel returns no calls", async () => {
+      const wallet = createMockWallet({
+        dca: vi.fn().mockReturnValue({
+          prepareCreate: vi.fn(),
+          prepareCancel: vi.fn().mockResolvedValue({ calls: [] }),
+        }),
+      });
+
+      await expect(
+        new TxBuilder(wallet)
+          .dcaCancel({
+            orderId: "ekubo-v1:0x1:7:0x111:0x222:300:1710000000:1710086400",
+          })
+          .calls()
+      ).rejects.toThrow('DCA action "cancel" returned no calls');
     });
   });
 
@@ -1176,6 +1144,28 @@ describe("TxBuilder", () => {
       }
 
       expect(wallet.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("should reject concurrent send attempts while the first send is in flight", async () => {
+      let resolveExecute: ((value: { hash: string }) => void) | undefined;
+      const executePromise = new Promise<{ hash: string }>((resolve) => {
+        resolveExecute = resolve;
+      });
+      const wallet = createMockWallet({
+        execute: vi.fn().mockReturnValue(executePromise),
+      });
+      const builder = new TxBuilder(wallet).add(rawCall);
+
+      const firstSend = builder.send();
+      await Promise.resolve();
+
+      await expect(builder.send()).rejects.toThrow(
+        "This transaction is currently being sent"
+      );
+      expect(wallet.execute).toHaveBeenCalledTimes(1);
+
+      resolveExecute?.({ hash: "0xtxhash" });
+      await expect(firstSend).resolves.toEqual({ hash: "0xtxhash" });
     });
   });
 

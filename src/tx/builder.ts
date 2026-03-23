@@ -3,6 +3,7 @@ import type { WalletInterface } from "@/wallet/interface";
 import type { Tx } from "@/tx";
 import type { SwapInput } from "@/swap";
 import { resolveSwapInput } from "@/swap/utils";
+import type { DcaCancelInput, DcaCreateInput, PreparedDcaAction } from "@/dca";
 import type {
   LendingBorrowRequest,
   LendingDepositRequest,
@@ -18,8 +19,8 @@ import type {
   PreflightResult,
   Token,
 } from "@/types";
-import type { ConfidentialProvider } from "@/confidential";
 import type {
+  ConfidentialProvider,
   ConfidentialFundDetails,
   ConfidentialTransferDetails,
   ConfidentialWithdrawDetails,
@@ -88,9 +89,29 @@ export class TxBuilder {
     action: string,
     preparedPromise: Promise<PreparedLendingAction>
   ): this {
+    return this.queuePreparedCalls(
+      `Lending action "${action}" returned no calls`,
+      preparedPromise
+    );
+  }
+
+  private queueDcaAction(
+    action: string,
+    preparedPromise: Promise<PreparedDcaAction>
+  ): this {
+    return this.queuePreparedCalls(
+      `DCA action "${action}" returned no calls`,
+      preparedPromise
+    );
+  }
+
+  private queuePreparedCalls(
+    emptyMessage: string,
+    preparedPromise: Promise<{ calls: Call[] }>
+  ): this {
     const calls = preparedPromise.then((prepared) => {
       if (prepared.calls.length === 0) {
-        throw new Error(`Lending action "${action}" returned no calls`);
+        throw new Error(emptyMessage);
       }
       return prepared.calls;
     });
@@ -123,10 +144,6 @@ export class TxBuilder {
     );
   }
 
-  // ============================================================
-  // State accessors
-  // ============================================================
-
   /**
    * The number of pending operations in the builder.
    *
@@ -150,10 +167,6 @@ export class TxBuilder {
   get isSent(): boolean {
     return this.sent;
   }
-
-  // ============================================================
-  // Raw calls
-  // ============================================================
 
   /**
    * Add one or more raw contract calls to the transaction.
@@ -179,10 +192,6 @@ export class TxBuilder {
     this.pending.push(calls);
     return this;
   }
-
-  // ============================================================
-  // ERC20 operations
-  // ============================================================
 
   /**
    * Approve an address to spend ERC20 tokens on behalf of the wallet.
@@ -247,24 +256,20 @@ export class TxBuilder {
   /**
    * Add a provider-driven swap operation.
    *
-   * Set `request.provider` to a provider instance or provider id.
-   * If omitted, uses the wallet default provider.
-   * `chainId` and `takerAddress` are optional and default to the connected wallet.
+   * Validates the request synchronously before delegating to
+   * `wallet.prepareSwap(...)` so invalid providers/chains fail fast and the
+   * builder only mutates when a swap can actually be prepared.
    */
   swap(request: SwapInput): this {
-    const { provider, request: resolvedRequest } = resolveSwapInput(request, {
+    resolveSwapInput(request, {
       walletChainId: this.wallet.getChainId(),
       takerAddress: this.wallet.address,
       providerResolver: this.wallet,
     });
-    const p = provider.swap(resolvedRequest).then((prepared) => {
-      if (prepared.calls.length === 0) {
-        throw new Error(`Swap provider "${provider.id}" returned no calls`);
-      }
-      return prepared.calls;
-    });
-    this.queueAsyncCalls(p);
-    return this;
+    return this.queuePreparedCalls(
+      "Swap returned no calls",
+      this.wallet.prepareSwap(request)
+    );
   }
 
   /**
@@ -317,9 +322,25 @@ export class TxBuilder {
     );
   }
 
-  // ============================================================
-  // Staking operations
-  // ============================================================
+  /**
+   * Add a DCA order creation operation.
+   */
+  dcaCreate(request: DcaCreateInput): this {
+    return this.queueDcaAction(
+      "create",
+      this.wallet.dca().prepareCreate(request)
+    );
+  }
+
+  /**
+   * Add a DCA cancellation operation.
+   */
+  dcaCancel(request: DcaCancelInput): this {
+    return this.queueDcaAction(
+      "cancel",
+      this.wallet.dca().prepareCancel(request)
+    );
+  }
 
   /**
    * Stake tokens in a delegation pool, automatically choosing the right
@@ -493,10 +514,6 @@ export class TxBuilder {
     return this;
   }
 
-  // ============================================================
-  // Confidential operations
-  // ============================================================
-
   /**
    * Fund a confidential account.
    *
@@ -575,10 +592,6 @@ export class TxBuilder {
     this.queueAsyncCalls(confidential.withdraw(details));
     return this;
   }
-
-  // ============================================================
-  // Terminal operations
-  // ============================================================
 
   /**
    * Resolve all pending operations into a flat array of Calls without executing.
@@ -686,7 +699,9 @@ export class TxBuilder {
       throw new Error("This transaction is currently being sent.");
     }
 
-    this.sendPromise = (async () => {
+    // Set the marker synchronously before any async work to prevent
+    // concurrent send() calls from passing the guard in the same microtask.
+    const promise = (async () => {
       const calls = await this.calls();
       if (calls.length === 0) {
         throw new Error(
@@ -698,9 +713,10 @@ export class TxBuilder {
       this.sent = true;
       return tx;
     })();
+    this.sendPromise = promise;
 
     try {
-      return await this.sendPromise;
+      return await promise;
     } finally {
       this.sendPromise = null;
     }
