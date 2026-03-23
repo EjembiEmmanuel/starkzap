@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Call, ExecuteOptions } from "starknet";
 import { fromAddress } from "@/types";
-import { TrovesStrategies } from "@/troves";
+import { Troves } from "@/troves";
 import type { Tx } from "@/tx";
 
 const MOCK_ADDRESS =
@@ -20,7 +20,7 @@ function createMockWallet() {
   };
 }
 
-describe("TrovesStrategies", () => {
+describe("Troves", () => {
   describe("getStrategies", () => {
     it("should fetch strategies from API", async () => {
       const wallet = createMockWallet();
@@ -60,7 +60,7 @@ describe("TrovesStrategies", () => {
         json: () => Promise.resolve(strategiesResponse),
       });
 
-      const troves = new TrovesStrategies(wallet as never, {
+      const troves = new Troves(wallet as never, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -88,7 +88,7 @@ describe("TrovesStrategies", () => {
           }),
       });
 
-      const troves = new TrovesStrategies(wallet as never, {
+      const troves = new Troves(wallet as never, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -108,7 +108,7 @@ describe("TrovesStrategies", () => {
         statusText: "Internal Server Error",
       });
 
-      const troves = new TrovesStrategies(wallet as never, {
+      const troves = new Troves(wallet as never, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -131,7 +131,7 @@ describe("TrovesStrategies", () => {
         json: () => Promise.resolve(statsResponse),
       });
 
-      const troves = new TrovesStrategies(wallet as never, {
+      const troves = new Troves(wallet as never, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -181,7 +181,7 @@ describe("TrovesStrategies", () => {
         json: () => Promise.resolve(depositCallsResponse),
       });
 
-      const troves = new TrovesStrategies(wallet as never, {
+      const troves = new Troves(wallet as never, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -229,7 +229,7 @@ describe("TrovesStrategies", () => {
           }),
       });
 
-      const troves = new TrovesStrategies(wallet as never, {
+      const troves = new Troves(wallet as never, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -275,7 +275,7 @@ describe("TrovesStrategies", () => {
         json: () => Promise.resolve(withdrawCallsResponse),
       });
 
-      const troves = new TrovesStrategies(wallet as never, {
+      const troves = new Troves(wallet as never, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -337,7 +337,7 @@ describe("TrovesStrategies", () => {
         json: () => Promise.resolve(depositCallsResponse),
       });
 
-      const troves = new TrovesStrategies(wallet as never, {
+      const troves = new Troves(wallet as never, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -390,7 +390,7 @@ describe("TrovesStrategies", () => {
         json: () => Promise.resolve(withdrawCallsResponse),
       });
 
-      const troves = new TrovesStrategies(wallet as never, {
+      const troves = new Troves(wallet as never, {
         fetcher: fetcher as typeof fetch,
       });
 

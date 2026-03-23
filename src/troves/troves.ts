@@ -33,7 +33,7 @@ function normalizeCalldata(raw: TrovesRawCall): Call {
 }
 
 /**
- * TrovesStrategies module for interacting with Troves DeFi strategies via StarkZap.
+ * Troves module for interacting with Troves DeFi strategies via StarkZap.
  *
  * Read operations (getStrategies, getStats) use Troves HTTP APIs.
  * Write operations (deposit, withdraw) call the Troves deposit/withdraw API to get
@@ -42,7 +42,7 @@ function normalizeCalldata(raw: TrovesRawCall): Call {
  * @example
  * ```ts
  * const wallet = await sdk.connectWallet({ account: { signer } });
- * const troves = new TrovesStrategies(wallet);
+ * const troves = new Troves(wallet);
  *
  * const strategies = await troves.getStrategies();
  * const stats = await troves.getStats();
