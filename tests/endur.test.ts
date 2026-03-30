@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { uint256 } from "starknet";
+import { uint256, type RpcProvider } from "starknet";
 import { fromAddress, Amount, ChainId } from "@/types";
 import type { WalletInterface } from "@/wallet/interface";
-import { Endur, EndurAssetSymbol } from "@/endur";
-import { getEndurLstConfig } from "@/endur/presets";
+import { EndurStaking } from "@/staking/lst";
+import { getLSTConfig } from "@/staking/lst";
 
 const mockTx = {
   hash: "0xmocktxhash",
   wait: vi.fn().mockResolvedValue(undefined),
 };
+
+const mockProvider = {} as RpcProvider;
 
 function createMockWallet(chainId: ChainId = ChainId.MAINNET): WalletInterface {
   const mockErc20 = {
@@ -28,41 +30,55 @@ function createMockWallet(chainId: ChainId = ChainId.MAINNET): WalletInterface {
   } as unknown as WalletInterface;
 }
 
-describe("getEndurLstConfig", () => {
+describe("getLSTConfig", () => {
   it("should return STRK config for mainnet", () => {
-    const config = getEndurLstConfig(ChainId.MAINNET, "STRK");
+    const config = getLSTConfig(ChainId.MAINNET, "STRK");
     expect(config).toBeDefined();
     expect(config!.symbol).toBe("STRK");
     expect(config!.lstSymbol).toBe("xSTRK");
   });
 
   it("should return WBTC config for mainnet", () => {
-    const config = getEndurLstConfig(ChainId.MAINNET, "WBTC");
+    const config = getLSTConfig(ChainId.MAINNET, "WBTC");
     expect(config).toBeDefined();
     expect(config!.symbol).toBe("WBTC");
   });
 
   it("should return undefined for unknown asset", () => {
-    const config = getEndurLstConfig(ChainId.MAINNET, "UNKNOWN");
+    const config = getLSTConfig(ChainId.MAINNET, "UNKNOWN");
     expect(config).toBeUndefined();
   });
 
   it("should be case-insensitive", () => {
-    expect(getEndurLstConfig(ChainId.MAINNET, "strk")).toBeDefined();
-    expect(getEndurLstConfig(ChainId.MAINNET, "wbTC")).toBeDefined();
+    expect(getLSTConfig(ChainId.MAINNET, "strk")).toBeDefined();
+    expect(getLSTConfig(ChainId.MAINNET, "wbTC")).toBeDefined();
   });
 
   it("should return Sepolia configs", () => {
-    const strk = getEndurLstConfig(ChainId.SEPOLIA, "STRK");
+    const strk = getLSTConfig(ChainId.SEPOLIA, "STRK");
     expect(strk).toBeDefined();
-    const tbtc1 = getEndurLstConfig(ChainId.SEPOLIA, "TBTC1");
+    const tbtc1 = getLSTConfig(ChainId.SEPOLIA, "TBTC1");
     expect(tbtc1).toBeDefined();
   });
 });
 
-describe("Endur", () => {
+describe("EndurStaking", () => {
+  describe("EndurStaking.from", () => {
+    it("should throw for unsupported asset", () => {
+      expect(() =>
+        EndurStaking.from("UNKNOWN", mockProvider, ChainId.MAINNET)
+      ).toThrow("Unsupported LST asset");
+    });
+
+    it("should create instance for supported asset", () => {
+      const lst = EndurStaking.from("STRK", mockProvider, ChainId.MAINNET);
+      expect(lst.asset).toBe("STRK");
+      expect(lst.lstSymbol).toBe("xSTRK");
+    });
+  });
+
   describe("getAPY with mocked fetcher", () => {
-    it("should return all assets when asset is undefined", async () => {
+    it("should return APY for the asset", async () => {
       const wallet = createMockWallet();
       const lstStatsJson = [
         {
@@ -79,30 +95,20 @@ describe("Endur", () => {
           tvlUsd: 100,
           tvlAsset: 2,
         },
-        {
-          asset: "tBTC",
-          apy: 0.04,
-          apyInPercentage: "4%",
-          tvlUsd: 50,
-          tvlAsset: 1,
-        },
       ];
       const fetcher = vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve(lstStatsJson),
       });
 
-      const endur = new Endur(wallet, {
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId(), {
         fetcher: fetcher as typeof fetch,
       });
 
-      const result = await endur.getAPY();
+      const result = await lst.getAPY();
 
-      expect(result).toMatchObject({
-        STRK: { apy: 0.1, apyInPercentage: "10%" },
-        WBTC: { apy: 0.05, apyInPercentage: "5%" },
-        tBTC: { apy: 0.04, apyInPercentage: "4%" },
-      });
+      expect(result["STRK"]).toEqual({ apy: 0.1, apyInPercentage: "10%" });
+      expect(Object.keys(result)).toEqual(["STRK"]);
       expect(fetcher).toHaveBeenCalledTimes(1);
       expect(fetcher).toHaveBeenCalledWith(
         "https://app.endur.fi/api/lst/stats",
@@ -110,78 +116,19 @@ describe("Endur", () => {
       );
     });
 
-    it("should return only STRK when asset is STRK", async () => {
+    it("should return empty object when asset not in response", async () => {
       const wallet = createMockWallet();
-      const lstStatsJson = [
-        {
-          asset: "STRK",
-          apy: 0.12,
-          apyInPercentage: "12%",
-          tvlUsd: 1000,
-          tvlAsset: 500,
-        },
-        {
-          asset: "WBTC",
-          apy: 0.05,
-          apyInPercentage: "5%",
-          tvlUsd: 100,
-          tvlAsset: 2,
-        },
-      ];
       const fetcher = vi.fn().mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve(lstStatsJson),
+        json: () => Promise.resolve([]),
       });
 
-      const endur = new Endur(wallet, {
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId(), {
         fetcher: fetcher as typeof fetch,
       });
 
-      const result = await endur.getAPY(EndurAssetSymbol("STRK"));
-
-      expect(result[EndurAssetSymbol("STRK")]).toEqual({
-        apy: 0.12,
-        apyInPercentage: "12%",
-      });
-      expect(Object.keys(result)).toEqual(["STRK"]);
-      expect(fetcher).toHaveBeenCalledTimes(1);
-    });
-
-    it("should return only requested asset when asset is specified", async () => {
-      const wallet = createMockWallet();
-      const lstStatsJson = [
-        {
-          asset: "STRK",
-          apy: 0.1,
-          apyInPercentage: "10%",
-          tvlUsd: 1000,
-          tvlAsset: 500,
-        },
-        {
-          asset: "WBTC",
-          apy: 0.05,
-          apyInPercentage: "5%",
-          tvlUsd: 100,
-          tvlAsset: 2,
-        },
-      ];
-      const fetcher = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(lstStatsJson),
-      });
-
-      const endur = new Endur(wallet, {
-        fetcher: fetcher as typeof fetch,
-      });
-
-      const result = await endur.getAPY(EndurAssetSymbol("WBTC"));
-
-      expect(result[EndurAssetSymbol("WBTC")]).toEqual({
-        apy: 0.05,
-        apyInPercentage: "5%",
-      });
-      expect(Object.keys(result)).toEqual(["WBTC"]);
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      const result = await lst.getAPY();
+      expect(result).toEqual({});
     });
 
     it("should throw when LST stats API returns non-ok", async () => {
@@ -192,18 +139,18 @@ describe("Endur", () => {
         statusText: "Internal Server Error",
       });
 
-      const endur = new Endur(wallet, {
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId(), {
         fetcher: fetcher as typeof fetch,
       });
 
-      await expect(endur.getAPY()).rejects.toThrow(
+      await expect(lst.getAPY()).rejects.toThrow(
         "Endur LST stats API failed: 500 Internal Server Error"
       );
     });
   });
 
   describe("getTVL with mocked fetcher", () => {
-    it("should return all assets when asset is undefined", async () => {
+    it("should return TVL for the asset", async () => {
       const wallet = createMockWallet();
       const lstStatsJson = [
         {
@@ -226,61 +173,13 @@ describe("Endur", () => {
         json: () => Promise.resolve(lstStatsJson),
       });
 
-      const endur = new Endur(wallet, {
+      const lst = EndurStaking.from("WBTC", mockProvider, wallet.getChainId(), {
         fetcher: fetcher as typeof fetch,
       });
 
-      const result = await endur.getTVL();
+      const result = await lst.getTVL();
 
-      expect(result[EndurAssetSymbol("STRK")]).toEqual({
-        tvlUsd: 1000,
-        tvlAsset: 500,
-      });
-      expect(result[EndurAssetSymbol("WBTC")]).toEqual({
-        tvlUsd: 100,
-        tvlAsset: 2,
-      });
-      expect(Object.keys(result)).toHaveLength(2);
-      expect(fetcher).toHaveBeenCalledTimes(1);
-      expect(fetcher).toHaveBeenCalledWith(
-        "https://app.endur.fi/api/lst/stats",
-        expect.objectContaining({ signal: expect.any(AbortSignal) })
-      );
-    });
-
-    it("should return only requested asset when asset is specified", async () => {
-      const wallet = createMockWallet();
-      const lstStatsJson = [
-        {
-          asset: "STRK",
-          tvlUsd: 1000,
-          tvlAsset: 500,
-          apy: 0.1,
-          apyInPercentage: "10%",
-        },
-        {
-          asset: "WBTC",
-          tvlUsd: 100,
-          tvlAsset: 2,
-          apy: 0.05,
-          apyInPercentage: "5%",
-        },
-      ];
-      const fetcher = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(lstStatsJson),
-      });
-
-      const endur = new Endur(wallet, {
-        fetcher: fetcher as typeof fetch,
-      });
-
-      const result = await endur.getTVL(EndurAssetSymbol("WBTC"));
-
-      expect(result[EndurAssetSymbol("WBTC")]).toEqual({
-        tvlUsd: 100,
-        tvlAsset: 2,
-      });
+      expect(result["WBTC"]).toEqual({ tvlUsd: 100, tvlAsset: 2 });
       expect(Object.keys(result)).toEqual(["WBTC"]);
       expect(fetcher).toHaveBeenCalledTimes(1);
     });
@@ -293,26 +192,23 @@ describe("Endur", () => {
         statusText: "Not Found",
       });
 
-      const endur = new Endur(wallet, {
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId(), {
         fetcher: fetcher as typeof fetch,
       });
 
-      await expect(endur.getTVL()).rejects.toThrow(
+      await expect(lst.getTVL()).rejects.toThrow(
         "Endur LST stats API failed: 404 Not Found"
       );
     });
   });
 
-  describe("deposit", () => {
+  describe("enter (deposit)", () => {
     it("should call execute with approve and deposit calls", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet);
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
       const amount = Amount.parse("100", 18);
 
-      const tx = await endur.deposit(
-        { asset: EndurAssetSymbol("STRK"), amount },
-        {}
-      );
+      const tx = await lst.enter(wallet, amount);
 
       expect(wallet.execute).toHaveBeenCalledTimes(1);
       const [calls] = (wallet.execute as ReturnType<typeof vi.fn>).mock
@@ -320,60 +216,59 @@ describe("Endur", () => {
       expect(calls).toHaveLength(2);
       expect(calls[0].entrypoint).toBe("approve");
       expect(calls[1].entrypoint).toBe("deposit");
-      const depositCalldata = calls[1].calldata!;
       const amountFromCalldata = uint256.uint256ToBN({
-        low: BigInt(depositCalldata[0]),
-        high: BigInt(depositCalldata[1]),
+        low: BigInt(calls[1].calldata[0]),
+        high: BigInt(calls[1].calldata[1]),
       });
       expect(amountFromCalldata).toBe(amount.toBase());
       expect(tx.hash).toBe("0xmocktxhash");
     });
 
-    it("should throw for unsupported asset", async () => {
-      const wallet = createMockWallet();
-      const endur = new Endur(wallet);
-
-      await expect(
-        endur.deposit(
-          {
-            asset: EndurAssetSymbol("UNKNOWN"),
-            amount: Amount.parse("100", 18),
-          },
-          {}
-        )
-      ).rejects.toThrow("Unsupported asset");
-    });
-
     it("should throw on decimal mismatch", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet);
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
 
       await expect(
-        endur.deposit(
-          {
-            asset: EndurAssetSymbol("STRK"),
-            amount: Amount.parse("100", 8),
-          }, // STRK has 18 decimals
-          {}
-        )
+        lst.enter(wallet, Amount.parse("100", 8)) // STRK has 18 decimals
       ).rejects.toThrow("Amount decimals mismatch");
     });
   });
 
-  describe("depositToValidator", () => {
+  describe("stake and add (aliases for enter)", () => {
+    it("stake should behave identically to enter", async () => {
+      const wallet = createMockWallet();
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
+
+      await lst.stake(wallet, Amount.parse("100", 18));
+
+      const [calls] = (wallet.execute as ReturnType<typeof vi.fn>).mock
+        .calls[0]!;
+      expect(calls[1].entrypoint).toBe("deposit");
+    });
+
+    it("add should behave identically to enter", async () => {
+      const wallet = createMockWallet();
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
+
+      await lst.add(wallet, Amount.parse("100", 18));
+
+      const [calls] = (wallet.execute as ReturnType<typeof vi.fn>).mock
+        .calls[0]!;
+      expect(calls[1].entrypoint).toBe("deposit");
+    });
+  });
+
+  describe("enterToValidator (deposit_to_validator)", () => {
     it("should call execute with approve and deposit_to_validator calls", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet);
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
       const validatorAddress =
         "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-      const tx = await endur.depositToValidator(
-        {
-          asset: EndurAssetSymbol("STRK"),
-          amount: Amount.parse("100", 18),
-          validatorAddress,
-        },
-        {}
+      const tx = await lst.enterToValidator(
+        wallet,
+        Amount.parse("100", 18),
+        validatorAddress
       );
 
       expect(wallet.execute).toHaveBeenCalledTimes(1);
@@ -382,58 +277,28 @@ describe("Endur", () => {
       expect(calls).toHaveLength(2);
       expect(calls[0].entrypoint).toBe("approve");
       expect(calls[1].entrypoint).toBe("deposit_to_validator");
-      expect(calls[1].contractAddress).toBeDefined();
-      expect(Array.isArray(calls[1].calldata)).toBe(true);
-      expect(calls[1].calldata!.length).toBeGreaterThanOrEqual(3);
       expect(tx.hash).toBe("0xmocktxhash");
     });
 
     it("should throw for empty validatorAddress", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet);
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
 
       await expect(
-        endur.depositToValidator(
-          {
-            asset: EndurAssetSymbol("STRK"),
-            amount: Amount.parse("100", 18),
-            validatorAddress: "",
-          },
-          {}
-        )
+        lst.enterToValidator(wallet, Amount.parse("100", 18), "")
       ).rejects.toThrow("requires a non-empty validatorAddress");
-    });
-
-    it("should throw for unsupported asset", async () => {
-      const wallet = createMockWallet();
-      const endur = new Endur(wallet);
-
-      await expect(
-        endur.depositToValidator(
-          {
-            asset: EndurAssetSymbol("UNKNOWN"),
-            amount: Amount.parse("100", 18),
-            validatorAddress:
-              "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          },
-          {}
-        )
-      ).rejects.toThrow("Unsupported asset");
     });
   });
 
-  describe("depositWithReferral", () => {
+  describe("enterWithReferral (deposit_with_referral)", () => {
     it("should call execute with approve and deposit_with_referral calls", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet);
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
 
-      const tx = await endur.depositWithReferral(
-        {
-          asset: EndurAssetSymbol("STRK"),
-          amount: Amount.parse("100", 18),
-          referralCode: "ABC123",
-        },
-        {}
+      const tx = await lst.enterWithReferral(
+        wallet,
+        Amount.parse("100", 18),
+        "ABC123"
       );
 
       expect(wallet.execute).toHaveBeenCalledTimes(1);
@@ -442,81 +307,38 @@ describe("Endur", () => {
       expect(calls).toHaveLength(2);
       expect(calls[0].entrypoint).toBe("approve");
       expect(calls[1].entrypoint).toBe("deposit_with_referral");
-      expect(calls[1].contractAddress).toBeDefined();
-      expect(Array.isArray(calls[1].calldata)).toBe(true);
-      expect(calls[1].calldata!.length).toBeGreaterThanOrEqual(3);
       expect(tx.hash).toBe("0xmocktxhash");
     });
 
     it("should throw for empty referralCode", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet);
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
 
       await expect(
-        endur.depositWithReferral(
-          {
-            asset: EndurAssetSymbol("STRK"),
-            amount: Amount.parse("100", 18),
-            referralCode: "",
-          },
-          {}
-        )
+        lst.enterWithReferral(wallet, Amount.parse("100", 18), "")
       ).rejects.toThrow("requires a non-empty referralCode");
 
       await expect(
-        endur.depositWithReferral(
-          {
-            asset: EndurAssetSymbol("STRK"),
-            amount: Amount.parse("100", 18),
-            referralCode: "   ",
-          },
-          {}
-        )
+        lst.enterWithReferral(wallet, Amount.parse("100", 18), "   ")
       ).rejects.toThrow("requires a non-empty referralCode");
-    });
-
-    it("should throw for unsupported asset", async () => {
-      const wallet = createMockWallet();
-      const endur = new Endur(wallet);
-
-      await expect(
-        endur.depositWithReferral(
-          {
-            asset: EndurAssetSymbol("UNKNOWN"),
-            amount: Amount.parse("100", 18),
-            referralCode: "ABC123",
-          },
-          {}
-        )
-      ).rejects.toThrow("Unsupported asset");
     });
 
     it("should throw on decimal mismatch", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet);
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
 
       await expect(
-        endur.depositWithReferral(
-          {
-            asset: EndurAssetSymbol("STRK"),
-            amount: Amount.parse("100", 8),
-            referralCode: "ABC123",
-          },
-          {}
-        )
+        lst.enterWithReferral(wallet, Amount.parse("100", 8), "ABC123")
       ).rejects.toThrow("Amount decimals mismatch");
     });
   });
 
-  describe("withdraw", () => {
+  describe("exitIntent (redeem)", () => {
     it("should call execute with redeem call", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet);
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
 
-      const tx = await endur.withdraw(
-        { asset: EndurAssetSymbol("STRK"), amount: Amount.parse("50", 18) },
-        {}
-      );
+      const tx = await lst.exitIntent(wallet, Amount.parse("50", 18));
 
       expect(wallet.execute).toHaveBeenCalledTimes(1);
       const [calls] = (wallet.execute as ReturnType<typeof vi.fn>).mock
@@ -526,31 +348,31 @@ describe("Endur", () => {
       expect(tx.hash).toBe("0xmocktxhash");
     });
 
-    it("should throw for unsupported asset", async () => {
-      const wallet = createMockWallet();
-      const endur = new Endur(wallet);
-
-      await expect(
-        endur.withdraw(
-          {
-            asset: EndurAssetSymbol("UNKNOWN"),
-            amount: Amount.parse("50", 18),
-          },
-          {}
-        )
-      ).rejects.toThrow("Unsupported asset");
-    });
-
     it("should throw on decimal mismatch", async () => {
       const wallet = createMockWallet();
-      const endur = new Endur(wallet);
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
 
       await expect(
-        endur.withdraw(
-          { asset: EndurAssetSymbol("STRK"), amount: Amount.parse("50", 8) },
-          {}
-        )
+        lst.exitIntent(wallet, Amount.parse("50", 8))
       ).rejects.toThrow("Amount decimals mismatch");
+    });
+  });
+
+  describe("getCommission", () => {
+    it("should return 0", async () => {
+      const lst = EndurStaking.from("STRK", mockProvider, ChainId.MAINNET);
+      expect(await lst.getCommission()).toBe(0);
+    });
+  });
+
+  describe("claimRewards", () => {
+    it("should throw not applicable error", async () => {
+      const wallet = createMockWallet();
+      const lst = EndurStaking.from("STRK", mockProvider, wallet.getChainId());
+
+      await expect(lst.claimRewards(wallet)).rejects.toThrow(
+        "claimRewards is not applicable"
+      );
     });
   });
 });

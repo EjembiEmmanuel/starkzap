@@ -2,7 +2,7 @@ import type { ChainId } from "@/types/config";
 import type { Address } from "@/types/address";
 import { fromAddress } from "@/types/address";
 
-export interface EndurLstConfig {
+export interface LSTConfig {
   readonly symbol: string;
   readonly lstSymbol: string;
   readonly assetAddress: Address;
@@ -10,7 +10,7 @@ export interface EndurLstConfig {
   readonly decimals: number;
 }
 
-const SN_MAIN_LST: Record<string, EndurLstConfig> = {
+const SN_MAIN_LST: Record<string, LSTConfig> = {
   STRK: {
     symbol: "STRK",
     lstSymbol: "xSTRK",
@@ -68,7 +68,7 @@ const SN_MAIN_LST: Record<string, EndurLstConfig> = {
   },
 };
 
-const SN_SEPOLIA_LST: Record<string, EndurLstConfig> = {
+const SN_SEPOLIA_LST: Record<string, LSTConfig> = {
   STRK: {
     symbol: "STRK",
     lstSymbol: "xSTRK",
@@ -104,49 +104,42 @@ const SN_SEPOLIA_LST: Record<string, EndurLstConfig> = {
   },
 };
 
-const PRESETS: Record<string, Record<string, EndurLstConfig>> = {
+const PRESETS: Record<string, Record<string, LSTConfig>> = {
   SN_MAIN: SN_MAIN_LST,
   SN_SEPOLIA: SN_SEPOLIA_LST,
 };
 
 function buildLookup(
-  chainConfig: Record<string, EndurLstConfig>
-): Map<string, EndurLstConfig> {
-  const m = new Map<string, EndurLstConfig>();
+  chainConfig: Record<string, LSTConfig>
+): Map<string, LSTConfig> {
+  const m = new Map<string, LSTConfig>();
   for (const c of Object.values(chainConfig)) {
     m.set(c.symbol.toLowerCase(), c);
   }
   return m;
 }
 
-const LOOKUPS: Record<string, Map<string, EndurLstConfig>> = {
+const LOOKUPS: Record<string, Map<string, LSTConfig>> = {
   SN_MAIN: buildLookup(SN_MAIN_LST),
   SN_SEPOLIA: buildLookup(SN_SEPOLIA_LST),
 };
 
 /**
- * Get supported asset symbols for a chain.
+ * Get supported LST asset symbols for a chain.
  */
-export function getSupportedAssetSymbols(chainId: ChainId): string[] {
+export function getSupportedLSTAssets(chainId: ChainId): string[] {
   const chainConfig = PRESETS[chainId.toLiteral()];
   return chainConfig ? Object.keys(chainConfig) : [];
 }
 
 /**
- * Get Endur LST configuration for the given chain and asset.
- *
- * @param chainId - The wallet's chain ID
- * @param assetSymbol - Asset symbol (e.g. STRK, WBTC, tBTC)
- * @returns LST config or undefined if not supported
+ * Get LST configuration for the given chain and asset symbol.
  */
-export function getEndurLstConfig(
+export function getLSTConfig(
   chainId: ChainId,
   assetSymbol: string
-): EndurLstConfig | undefined {
-  const literal = chainId.toLiteral();
-  const lookup = LOOKUPS[literal];
+): LSTConfig | undefined {
+  const lookup = LOOKUPS[chainId.toLiteral()];
   if (!lookup) return undefined;
-
-  const normalized = assetSymbol.toLowerCase();
-  return lookup.get(normalized);
+  return lookup.get(assetSymbol.toLowerCase());
 }
