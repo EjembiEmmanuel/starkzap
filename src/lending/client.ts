@@ -7,17 +7,21 @@ import type {
   LendingHealthQuote,
   LendingHealthQuoteRequest,
   LendingMarketsRequest,
+  LendingMaxBorrowRequest,
   LendingMarket,
   LendingPosition,
   LendingPositionRequest,
   LendingProvider,
   LendingProviderContext,
   LendingRepayRequest,
+  LendingUserPosition,
+  LendingUserPositionsRequest,
   LendingWithdrawMaxRequest,
   LendingWithdrawRequest,
   PreparedLendingAction,
 } from "@/lending/interface";
 import { VesuLendingProvider } from "@/lending/vesu";
+import { assertPreparedCalls } from "@/providers/assert";
 import type { ExecuteOptions } from "@/types";
 import type { Tx } from "@/tx";
 import {
@@ -89,6 +93,33 @@ export class LendingClient {
     return await this.resolveRequestProvider(request.provider).getMarkets(
       this.context.getChainId()
     );
+  }
+
+  async getPositions(
+    request: LendingUserPositionsRequest = {}
+  ): Promise<LendingUserPosition[]> {
+    const provider = this.resolveRequestProvider(request.provider);
+    if (!provider.getPositions) {
+      throw new Error(
+        `Lending provider "${provider.id}" does not support position queries`
+      );
+    }
+    return await provider.getPositions(this.providerContext(), {
+      user: request.user ?? this.context.address,
+    });
+  }
+
+  async getMaxBorrowAmount(request: LendingMaxBorrowRequest): Promise<bigint> {
+    const provider = this.resolveRequestProvider(request.provider);
+    if (!provider.getMaxBorrowAmount) {
+      throw new Error(
+        `Lending provider "${provider.id}" does not support max borrow queries`
+      );
+    }
+    return await provider.getMaxBorrowAmount(this.providerContext(), {
+      ...stripProvider(request),
+      user: request.user ?? this.context.address,
+    });
   }
 
   async prepareDeposit(
@@ -331,7 +362,7 @@ export class LendingClient {
       this.providerContext(),
       hydrate(request, this.context.address)
     );
-    this.assertPreparedCalls(prepared, provider.id);
+    assertPreparedCalls(prepared.calls, "Lending", provider.id);
     return prepared;
   }
 
@@ -348,15 +379,5 @@ export class LendingClient {
       provider: this.context.getProvider(),
       walletAddress: this.context.address,
     };
-  }
-
-  private assertPreparedCalls(
-    prepared: PreparedLendingAction,
-    providerId: string
-  ): void {
-    if (prepared.calls.length > 0) {
-      return;
-    }
-    throw new Error(`Lending provider "${providerId}" returned no calls`);
   }
 }

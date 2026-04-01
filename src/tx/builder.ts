@@ -3,11 +3,11 @@ import type { WalletInterface } from "@/wallet/interface";
 import type { Tx } from "@/tx";
 import type { SwapInput } from "@/swap";
 import { resolveSwapInput } from "@/swap/utils";
+import type { DcaCancelInput, DcaCreateInput } from "@/dca";
 import type {
   LendingBorrowRequest,
   LendingDepositRequest,
   LendingWithdrawMaxRequest,
-  PreparedLendingAction,
   LendingRepayRequest,
   LendingWithdrawRequest,
 } from "@/lending";
@@ -18,8 +18,8 @@ import type {
   PreflightResult,
   Token,
 } from "@/types";
-import type { ConfidentialProvider } from "@/confidential";
 import type {
+  ConfidentialProvider,
   ConfidentialFundDetails,
   ConfidentialTransferDetails,
   ConfidentialWithdrawDetails,
@@ -84,13 +84,14 @@ export class TxBuilder {
     this.pending.push(tracked);
   }
 
-  private queueLendingAction(
+  private queuePreparedCalls(
+    domain: string,
     action: string,
-    preparedPromise: Promise<PreparedLendingAction>
+    preparedPromise: Promise<{ calls: Call[] }>
   ): this {
     const calls = preparedPromise.then((prepared) => {
       if (prepared.calls.length === 0) {
-        throw new Error(`Lending action "${action}" returned no calls`);
+        throw new Error(`${domain} action "${action}" returned no calls`);
       }
       return prepared.calls;
     });
@@ -99,33 +100,16 @@ export class TxBuilder {
   }
 
   private throwPendingErrorsIfAny(): void {
-    if (this.pendingErrors.length === 0) {
-      return;
-    }
-
-    const errors = this.pendingErrors.splice(0, this.pendingErrors.length);
-    if (errors.length === 1) {
-      const first = errors[0];
-      throw first instanceof Error
-        ? first
-        : new Error(String(first ?? "Unknown async builder error"));
-    }
-
-    const messages = errors
-      .map((error) =>
-        error instanceof Error
-          ? error.message
-          : String(error ?? "Unknown async builder error")
-      )
-      .join("; ");
-    throw new Error(
-      `Multiple transaction builder operations failed: ${messages}`
+    if (this.pendingErrors.length === 0) return;
+    const errors = this.pendingErrors.splice(0);
+    if (errors.length === 1 && errors[0] instanceof Error) throw errors[0];
+    const messages = errors.map((e) =>
+      e instanceof Error
+        ? e.message
+        : String(e ?? "Unknown async builder error")
     );
+    throw new Error(messages.join("; "));
   }
-
-  // ============================================================
-  // State accessors
-  // ============================================================
 
   /**
    * The number of pending operations in the builder.
@@ -151,10 +135,6 @@ export class TxBuilder {
     return this.sent;
   }
 
-  // ============================================================
-  // Raw calls
-  // ============================================================
-
   /**
    * Add one or more raw contract calls to the transaction.
    *
@@ -179,10 +159,6 @@ export class TxBuilder {
     this.pending.push(calls);
     return this;
   }
-
-  // ============================================================
-  // ERC20 operations
-  // ============================================================
 
   /**
    * Approve an address to spend ERC20 tokens on behalf of the wallet.
@@ -247,31 +223,29 @@ export class TxBuilder {
   /**
    * Add a provider-driven swap operation.
    *
-   * Set `request.provider` to a provider instance or provider id.
-   * If omitted, uses the wallet default provider.
-   * `chainId` and `takerAddress` are optional and default to the connected wallet.
+   * Validates the request synchronously before delegating to
+   * `wallet.prepareSwap(...)` so invalid providers/chains fail fast and the
+   * builder only mutates when a swap can actually be prepared.
    */
   swap(request: SwapInput): this {
-    const { provider, request: resolvedRequest } = resolveSwapInput(request, {
+    resolveSwapInput(request, {
       walletChainId: this.wallet.getChainId(),
       takerAddress: this.wallet.address,
       providerResolver: this.wallet,
     });
-    const p = provider.swap(resolvedRequest).then((prepared) => {
-      if (prepared.calls.length === 0) {
-        throw new Error(`Swap provider "${provider.id}" returned no calls`);
-      }
-      return prepared.calls;
-    });
-    this.queueAsyncCalls(p);
-    return this;
+    return this.queuePreparedCalls(
+      "Swap",
+      "swap",
+      this.wallet.prepareSwap(request)
+    );
   }
 
   /**
    * Add a lending deposit operation.
    */
   lendDeposit(request: LendingDepositRequest): this {
-    return this.queueLendingAction(
+    return this.queuePreparedCalls(
+      "Lending",
       "deposit",
       this.wallet.lending().prepareDeposit(request)
     );
@@ -281,7 +255,8 @@ export class TxBuilder {
    * Add a lending withdraw operation.
    */
   lendWithdraw(request: LendingWithdrawRequest): this {
-    return this.queueLendingAction(
+    return this.queuePreparedCalls(
+      "Lending",
       "withdraw",
       this.wallet.lending().prepareWithdraw(request)
     );
@@ -291,7 +266,8 @@ export class TxBuilder {
    * Add a max-withdraw lending operation.
    */
   lendWithdrawMax(request: LendingWithdrawMaxRequest): this {
-    return this.queueLendingAction(
+    return this.queuePreparedCalls(
+      "Lending",
       "withdrawMax",
       this.wallet.lending().prepareWithdrawMax(request)
     );
@@ -301,7 +277,8 @@ export class TxBuilder {
    * Add a lending borrow operation.
    */
   lendBorrow(request: LendingBorrowRequest): this {
-    return this.queueLendingAction(
+    return this.queuePreparedCalls(
+      "Lending",
       "borrow",
       this.wallet.lending().prepareBorrow(request)
     );
@@ -311,15 +288,34 @@ export class TxBuilder {
    * Add a lending repay operation.
    */
   lendRepay(request: LendingRepayRequest): this {
-    return this.queueLendingAction(
+    return this.queuePreparedCalls(
+      "Lending",
       "repay",
       this.wallet.lending().prepareRepay(request)
     );
   }
 
-  // ============================================================
-  // Staking operations
-  // ============================================================
+  /**
+   * Add a DCA order creation operation.
+   */
+  dcaCreate(request: DcaCreateInput): this {
+    return this.queuePreparedCalls(
+      "DCA",
+      "create",
+      this.wallet.dca().prepareCreate(request)
+    );
+  }
+
+  /**
+   * Add a DCA cancellation operation.
+   */
+  dcaCancel(request: DcaCancelInput): this {
+    return this.queuePreparedCalls(
+      "DCA",
+      "cancel",
+      this.wallet.dca().prepareCancel(request)
+    );
+  }
 
   /**
    * Stake tokens in a delegation pool, automatically choosing the right
@@ -493,10 +489,6 @@ export class TxBuilder {
     return this;
   }
 
-  // ============================================================
-  // Confidential operations
-  // ============================================================
-
   /**
    * Fund a confidential account.
    *
@@ -575,10 +567,6 @@ export class TxBuilder {
     this.queueAsyncCalls(confidential.withdraw(details));
     return this;
   }
-
-  // ============================================================
-  // Terminal operations
-  // ============================================================
 
   /**
    * Resolve all pending operations into a flat array of Calls without executing.
@@ -679,28 +667,28 @@ export class TxBuilder {
    * ```
    */
   async send(options?: ExecuteOptions): Promise<Tx> {
-    if (this.sent) {
-      throw new Error("This transaction has already been sent.");
-    }
-    if (this.sendPromise) {
-      throw new Error("This transaction is currently being sent.");
+    if (this.sent || this.sendPromise) {
+      throw new Error(
+        this.sent
+          ? "This transaction has already been sent."
+          : "This transaction is currently being sent."
+      );
     }
 
-    this.sendPromise = (async () => {
-      const calls = await this.calls();
+    const promise = this.calls().then(async (calls) => {
       if (calls.length === 0) {
         throw new Error(
           "No calls to execute. Add at least one operation before calling send()."
         );
       }
-
       const tx = await this.wallet.execute(calls, options);
       this.sent = true;
       return tx;
-    })();
+    });
+    this.sendPromise = promise;
 
     try {
-      return await this.sendPromise;
+      return await promise;
     } finally {
       this.sendPromise = null;
     }
