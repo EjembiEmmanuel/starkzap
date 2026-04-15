@@ -13,6 +13,7 @@ import type { PoolMember } from "@/types/pool";
 import type { WalletInterface } from "@/wallet/interface";
 import type { Tx } from "@/tx";
 import type { ChainId } from "@/types/config";
+import type { StakingProvider } from "@/staking/interface";
 import {
   getLSTConfig,
   getSupportedLSTAssets,
@@ -79,7 +80,7 @@ export type EndurTVLResult = Partial<
  * await exitTx.wait();
  * ```
  */
-export class EndurStaking {
+export class EndurStaking implements StakingProvider {
   private readonly config: LSTConfig;
   private readonly provider: RpcProvider;
   private readonly chainId: ChainId;
