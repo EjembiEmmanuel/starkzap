@@ -1,31 +1,31 @@
 import {
   Account,
-  RpcProvider,
-  PaymasterRpc,
-  hash,
   type Call,
+  hash,
+  PaymasterRpc,
   type PaymasterTimeBounds,
-  type TypedData,
+  RpcProvider,
   type Signature,
+  type TypedData,
 } from "starknet";
 import { Tx } from "@/tx";
 import { AccountProvider } from "@/wallet/accounts/provider";
-import { SignerAdapter } from "@/signer";
 import type { SignerInterface } from "@/signer";
+import { SignerAdapter } from "@/signer";
 import type {
-  Address,
   AccountClassConfig,
+  Address,
   BridgingConfig,
+  ChainId,
   DeployOptions,
   EnsureReadyOptions,
   ExecuteOptions,
+  ExplorerConfig,
   FeeMode,
   PreflightOptions,
   PreflightResult,
   ProviderOptions,
   SDKConfig,
-  ExplorerConfig,
-  ChainId,
   StakingConfig,
 } from "@/types";
 import {
@@ -37,8 +37,8 @@ import {
 import type { WalletInterface } from "@/wallet/interface";
 import { BaseWallet } from "@/wallet/base";
 import {
-  BraavosPreset,
   BRAAVOS_IMPL_CLASS_HASH,
+  BraavosPreset,
   OpenZeppelinPreset,
 } from "@/account/presets";
 
@@ -593,8 +593,8 @@ export class Wallet extends BaseWallet {
     return this.account.estimateInvokeFee(calls);
   }
 
-  async disconnect(): Promise<void> {
-    this.clearCaches();
+  override async disconnect(): Promise<void> {
+    await super.disconnect();
     this.clearDeploymentCache();
   }
 }

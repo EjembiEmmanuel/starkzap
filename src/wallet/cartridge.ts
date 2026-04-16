@@ -1,24 +1,24 @@
 import {
-  RpcProvider,
   type Account,
   type Call,
   type PaymasterTimeBounds,
-  type TypedData,
+  RpcProvider,
   type Signature,
+  type TypedData,
 } from "starknet";
 import { Tx } from "@/tx";
 import {
   type BridgingConfig,
   ChainId,
-  getChainId,
   type DeployOptions,
   type EnsureReadyOptions,
   type ExecuteOptions,
+  type ExplorerConfig,
   type FeeMode,
+  fromAddress,
+  getChainId,
   type PreflightOptions,
   type PreflightResult,
-  type ExplorerConfig,
-  fromAddress,
   type StakingConfig,
 } from "@/types";
 import {
@@ -383,8 +383,8 @@ export class CartridgeWallet extends BaseWallet {
     return this.controller;
   }
 
-  async disconnect(): Promise<void> {
-    this.clearCaches();
+  override async disconnect(): Promise<void> {
+    await super.disconnect();
     this.clearDeploymentCache();
     await this.controller.disconnect();
   }

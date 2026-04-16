@@ -1,4 +1,4 @@
-import { assertSafeHttpUrl } from "@/utils";
+import { assertSafeHttpUrl, resolveFetch } from "@/utils";
 import { type EthereumBridgeProtocol, Protocol } from "@/types/bridge/protocol";
 import { ExternalChain } from "@/types/bridge/external-chain";
 import {
@@ -48,6 +48,7 @@ interface BridgeTokenApiRecord {
   l2_bridge_address?: string;
   l2_fee_token_address?: string;
   bitcoin_runes_id?: string;
+  AW_support?: boolean;
 }
 
 const DEFAULT_ENV: BridgeTokenApiEnv = "mainnet";
@@ -189,6 +190,7 @@ function parseToken(
       ),
       starknetAddress: fromAddress(requiredString(token, "l2_token_address")),
       starknetBridge: fromAddress(requiredString(token, "l2_bridge_address")),
+      supportsAutoWithdraw: token.AW_support === true,
       ...(coingeckoId ? { coingeckoId } : {}),
     });
   }
@@ -260,15 +262,7 @@ export class BridgeTokenRepository {
       throw new Error("cacheTtlMs must be a positive finite number");
     }
 
-    if (options.fetchFn) {
-      this.fetchFn = options.fetchFn;
-    } else if (typeof globalThis.fetch === "function") {
-      this.fetchFn = globalThis.fetch.bind(globalThis) as typeof fetch;
-    } else {
-      throw new Error(
-        "No fetch implementation available. Provide fetchFn in BridgeTokenRepositoryOptions."
-      );
-    }
+    this.fetchFn = resolveFetch(options.fetchFn);
 
     this.now = options.now ?? Date.now;
   }

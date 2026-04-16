@@ -2,9 +2,8 @@ import type { ChainId } from "@/types";
 import {
   ETH_FAST_TRANSFER_FEE_BP,
   ETHEREUM_DOMAIN_ID,
+  getCircleApiBaseUrl,
   getFinalityThreshold,
-  LIVE_DOMAIN,
-  SANDBOX_DOMAIN,
   STARKNET_DOMAIN_ID,
   STARKNET_FAST_TRANSFER_FEE_BP,
 } from "@/bridge/ethereum/cctp/constants";
@@ -63,10 +62,13 @@ export class CCTPFees {
       direction === BridgeDirection.DEPOSIT_TO_STARKNET
         ? STARKNET_DOMAIN_ID
         : ETHEREUM_DOMAIN_ID;
-    const domainUrl = chainId.isMainnet() ? LIVE_DOMAIN : SANDBOX_DOMAIN;
+
+    const domainUrl = getCircleApiBaseUrl(chainId);
     const url = `${domainUrl}/v2/burn/USDC/fees/${source}/${destination}`;
 
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(10_000),
+    });
     if (!response.ok) {
       throw new Error(
         `Failed to fetch fees from Circle API: ${response.statusText}`
