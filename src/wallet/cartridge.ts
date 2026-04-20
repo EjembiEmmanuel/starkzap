@@ -24,8 +24,9 @@ import {
 import {
   checkDeployed,
   ensureWalletReady,
+  normalizeFeeMode,
+  paymasterDetails,
   preflightTransaction,
-  sponsoredDetails,
 } from "@/wallet/utils";
 import { BaseWallet } from "@/wallet/base";
 import { assertSafeHttpUrl } from "@/utils";
@@ -310,18 +311,18 @@ export class CartridgeWallet extends BaseWallet {
   }
 
   async execute(calls: Call[], options: ExecuteOptions = {}): Promise<Tx> {
-    const feeMode = options.feeMode ?? this.defaultFeeMode;
+    const feeMode = normalizeFeeMode(options.feeMode ?? this.defaultFeeMode);
     const timeBounds = options.timeBounds ?? this.defaultTimeBounds;
 
     let transaction_hash: string;
 
-    if (feeMode === "sponsored") {
+    if (feeMode !== "user_pays") {
       // Allow provider/controller implementations to handle undeployed accounts
       // atomically via paymaster flow when supported.
       transaction_hash = (
         await this.walletAccount.executePaymasterTransaction(
           calls,
-          sponsoredDetails(timeBounds)
+          paymasterDetails({ feeMode, timeBounds })
         )
       ).transaction_hash;
     } else {

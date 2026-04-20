@@ -72,10 +72,21 @@ function unsupportedSessionFeature(feature: string): Error {
 }
 
 function unsupportedUserPaysMessage(): string {
-  return 'Cartridge wallet currently supports sponsored session execution only. Use feeMode: "sponsored".';
+  return 'Cartridge wallet currently supports sponsored session execution only. Use feeMode: { type: "paymaster" }.';
 }
 
-export type SupportedNativeCartridgeFeeMode = Extract<FeeMode, "sponsored">;
+function unsupportedGasTokenMessage(): string {
+  return 'Cartridge wallet does not support gasToken. Use feeMode: { type: "paymaster" } without gasToken.';
+}
+
+/**
+ * Fee modes supported by native Cartridge sessions.
+ * Only sponsored execution is supported — `gasToken` is not available.
+ */
+export type SupportedNativeCartridgeFeeMode =
+  | "sponsored"
+  | { type: "paymaster" };
+
 type UniversalDetailsWithTimeBounds = UniversalDetails & {
   timeBounds?: PaymasterTimeBounds;
 };
@@ -85,6 +96,16 @@ export function validateSupportedCartridgeFeeMode(
 ): SupportedNativeCartridgeFeeMode | undefined {
   if (feeMode === undefined || feeMode === "sponsored") {
     return feeMode;
+  }
+  if (
+    typeof feeMode === "object" &&
+    feeMode !== null &&
+    feeMode.type === "paymaster"
+  ) {
+    if (feeMode.gasToken) {
+      throw new Error(unsupportedGasTokenMessage());
+    }
+    return { type: "paymaster" };
   }
 
   throw new Error(unsupportedUserPaysMessage());
@@ -276,7 +297,7 @@ export class NativeCartridgeWallet extends BaseWallet {
     this.chainId = options.chainId;
     this.classHash = options.classHash;
     this.explorerConfig = options.explorer;
-    this.defaultFeeMode = options.feeMode ?? "sponsored";
+    this.defaultFeeMode = options.feeMode ?? { type: "paymaster" };
     this.defaultTimeBounds = options.timeBounds;
     this.account = new NativeCartridgeAccount({
       session: options.session,
@@ -288,8 +309,9 @@ export class NativeCartridgeWallet extends BaseWallet {
   static async create(
     options: NativeCartridgeWalletOptions
   ): Promise<NativeCartridgeWallet> {
-    const feeMode =
-      validateSupportedCartridgeFeeMode(options.feeMode) ?? "sponsored";
+    const feeMode = validateSupportedCartridgeFeeMode(options.feeMode) ?? {
+      type: "paymaster",
+    };
     let classHash: string | undefined;
     try {
       classHash = await options.provider.getClassHashAt(
@@ -304,7 +326,7 @@ export class NativeCartridgeWallet extends BaseWallet {
     return new NativeCartridgeWallet({
       ...options,
       ...(classHash !== undefined && { classHash }),
-      ...(feeMode && { feeMode }),
+      feeMode,
     });
   }
 
@@ -361,7 +383,7 @@ export class NativeCartridgeWallet extends BaseWallet {
 
   async execute(calls: Call[], options: ExecuteOptions = {}): Promise<Tx> {
     const feeMode = options.feeMode ?? this.defaultFeeMode;
-    if (feeMode !== "sponsored") {
+    if (feeMode === "user_pays") {
       throw new Error(unsupportedUserPaysMessage());
     }
     const timeBounds = options.timeBounds ?? this.defaultTimeBounds;
@@ -387,7 +409,7 @@ export class NativeCartridgeWallet extends BaseWallet {
 
   async preflight(options: PreflightOptions): Promise<PreflightResult> {
     const feeMode = options.feeMode ?? this.defaultFeeMode;
-    if (feeMode !== "sponsored") {
+    if (feeMode === "user_pays") {
       return { ok: false, reason: unsupportedUserPaysMessage() };
     }
     const simulate = this.session.account.simulateTransaction;

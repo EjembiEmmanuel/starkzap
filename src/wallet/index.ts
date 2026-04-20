@@ -31,8 +31,9 @@ import type {
 import {
   checkDeployed,
   ensureWalletReady,
+  normalizeFeeMode,
+  paymasterDetails,
   preflightTransaction,
-  sponsoredDetails,
 } from "@/wallet/utils";
 import type { WalletInterface } from "@/wallet/interface";
 import { BaseWallet } from "@/wallet/base";
@@ -289,11 +290,11 @@ export class Wallet extends BaseWallet {
 
   async deploy(options: DeployOptions = {}): Promise<Tx> {
     this.clearDeploymentCache();
-    const feeMode = options.feeMode ?? this.defaultFeeMode;
+    const feeMode = normalizeFeeMode(options.feeMode ?? this.defaultFeeMode);
     const timeBounds = options.timeBounds ?? this.defaultTimeBounds;
 
-    if (feeMode === "sponsored") {
-      return this.deployPaymasterWith([], timeBounds);
+    if (feeMode !== "user_pays") {
+      return this.deployPaymasterWith([], timeBounds, feeMode.gasToken);
     }
 
     const classHash = this.accountProvider.getClassHash();
@@ -357,21 +358,26 @@ export class Wallet extends BaseWallet {
 
   private async deployPaymasterWith(
     calls: Call[],
-    timeBounds?: PaymasterTimeBounds
+    timeBounds?: PaymasterTimeBounds,
+    gasToken?: Address
   ): Promise<Tx> {
     this.clearDeploymentCache();
     const classHash = this.accountProvider.getClassHash();
 
     // Special handling for Braavos - deploy via factory
     if (classHash === BraavosPreset.classHash) {
-      return this.deployBraavosViaFactory(calls, timeBounds);
+      return this.deployBraavosViaFactory(calls, timeBounds, gasToken);
     }
 
     // Standard deployment flow
     const deploymentData = await this.accountProvider.getDeploymentData();
     const { transaction_hash } = await this.account.executePaymasterTransaction(
       calls,
-      sponsoredDetails(timeBounds ?? this.defaultTimeBounds, deploymentData)
+      paymasterDetails({
+        feeMode: { type: "paymaster", ...(gasToken && { gasToken }) },
+        timeBounds: timeBounds ?? this.defaultTimeBounds,
+        deploymentData,
+      })
     );
     return new Tx(
       transaction_hash,
@@ -391,7 +397,8 @@ export class Wallet extends BaseWallet {
    */
   private async deployBraavosViaFactory(
     calls: Call[],
-    timeBounds?: PaymasterTimeBounds
+    timeBounds?: PaymasterTimeBounds,
+    gasToken?: Address
   ): Promise<Tx> {
     const publicKey = await this.accountProvider.getPublicKey();
     const signer = this.accountProvider.getSigner();
@@ -472,7 +479,11 @@ export class Wallet extends BaseWallet {
       : await ozProvider.getDeploymentData();
     const { transaction_hash } = await ozAccount.executePaymasterTransaction(
       allCalls,
-      sponsoredDetails(timeBounds ?? this.defaultTimeBounds, ozDeploymentData)
+      paymasterDetails({
+        feeMode: { type: "paymaster", ...(gasToken && { gasToken }) },
+        timeBounds: timeBounds ?? this.defaultTimeBounds,
+        deploymentData: ozDeploymentData,
+      })
     );
 
     return new Tx(
@@ -484,12 +495,12 @@ export class Wallet extends BaseWallet {
   }
 
   async execute(calls: Call[], options: ExecuteOptions = {}): Promise<Tx> {
-    const feeMode = options.feeMode ?? this.defaultFeeMode;
+    const feeMode = normalizeFeeMode(options.feeMode ?? this.defaultFeeMode);
     const timeBounds = options.timeBounds ?? this.defaultTimeBounds;
 
     const transactionHash =
-      feeMode === "sponsored"
-        ? await this.executeSponsored(calls, timeBounds)
+      feeMode !== "user_pays"
+        ? await this.executeSponsored(calls, timeBounds, feeMode.gasToken)
         : await this.executeUserPays(calls);
 
     return new Tx(
@@ -512,31 +523,40 @@ export class Wallet extends BaseWallet {
 
   private executePaymaster(
     calls: Call[],
-    timeBounds: PaymasterTimeBounds | undefined
+    timeBounds: PaymasterTimeBounds | undefined,
+    gasToken?: Address
   ): Promise<string> {
     return this.account
-      .executePaymasterTransaction(calls, sponsoredDetails(timeBounds))
+      .executePaymasterTransaction(
+        calls,
+        paymasterDetails({
+          feeMode: { type: "paymaster", ...(gasToken && { gasToken }) },
+          timeBounds,
+        })
+      )
       .then((r) => r.transaction_hash);
   }
 
   private async executeSponsored(
     calls: Call[],
-    timeBounds: PaymasterTimeBounds | undefined
+    timeBounds: PaymasterTimeBounds | undefined,
+    gasToken?: Address
   ): Promise<string> {
     if (await this.isDeployed()) {
-      return this.executePaymaster(calls, timeBounds);
+      return this.executePaymaster(calls, timeBounds, gasToken);
     }
 
     return this.withSponsoredDeployLock(async () => {
       if (await this.isDeployed()) {
-        return this.executePaymaster(calls, timeBounds);
+        return this.executePaymaster(calls, timeBounds, gasToken);
       }
 
       try {
-        return (await this.deployPaymasterWith(calls, timeBounds)).hash;
+        return (await this.deployPaymasterWith(calls, timeBounds, gasToken))
+          .hash;
       } catch (error) {
         if (!isAlreadyDeployedError(error)) throw error;
-        return this.executePaymaster(calls, timeBounds);
+        return this.executePaymaster(calls, timeBounds, gasToken);
       }
     });
   }
