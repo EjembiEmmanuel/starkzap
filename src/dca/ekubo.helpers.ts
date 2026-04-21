@@ -5,12 +5,12 @@ import {
   type DcaOrderStatus,
 } from "@/dca/interface";
 import { isRecord } from "@/utils/ekubo";
+import { MAX_U128 } from "@/utils/constants";
 
 export const DEFAULT_EKUBO_DCA_API_BASE = "https://prod-api.ekubo.org";
 export const MINIMUM_START_DELAY_SECONDS = 64;
 
 const EKUBO_TIME_SPACING_SECONDS = 16;
-const MAX_U128 = 2n ** 128n - 1n;
 const ORDER_ID_PREFIX = "ekubo-v1";
 
 export interface EkuboOrderKey {
@@ -374,16 +374,15 @@ export function parseOrderInfosResult(
   result: string[],
   expected: number
 ): EkuboOnChainOrderInfo[] {
-  const values = result.map((item) => String(item));
   const expectedLength = expected * 3 + 1;
 
-  if (values.length !== expectedLength) {
+  if (result.length !== expectedLength) {
     throw new Error(
-      `Ekubo order infos response is malformed: expected ${expectedLength} values, got ${values.length}`
+      `Ekubo order infos response is malformed: expected ${expectedLength} values, got ${result.length}`
     );
   }
 
-  const declaredLength = Number(values[0]);
+  const declaredLength = Number(result[0]);
   if (declaredLength !== expected) {
     throw new Error(
       `Ekubo order infos length mismatch: header says ${declaredLength}, expected ${expected}`
@@ -393,7 +392,7 @@ export function parseOrderInfosResult(
   const infos: EkuboOnChainOrderInfo[] = [];
   for (let index = 0; index < expected; index += 1) {
     const baseIndex = 1 + index * 3;
-    infos.push(parseOrderInfoResult(values.slice(baseIndex, baseIndex + 3)));
+    infos.push(parseOrderInfoResult(result.slice(baseIndex, baseIndex + 3)));
   }
 
   return infos;

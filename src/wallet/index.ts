@@ -1,46 +1,48 @@
 import {
   Account,
-  RpcProvider,
-  PaymasterRpc,
-  hash,
   type Call,
+  hash,
+  PaymasterRpc,
   type PaymasterTimeBounds,
-  type TypedData,
+  RpcProvider,
   type Signature,
+  type TypedData,
 } from "starknet";
 import { Tx } from "@/tx";
 import { AccountProvider } from "@/wallet/accounts/provider";
-import { SignerAdapter } from "@/signer";
 import type { SignerInterface } from "@/signer";
+import { SignerAdapter } from "@/signer";
 import type {
-  Address,
   AccountClassConfig,
+  Address,
   BridgingConfig,
+  ChainId,
   DeployOptions,
   EnsureReadyOptions,
   ExecuteOptions,
+  ExplorerConfig,
   FeeMode,
   PreflightOptions,
   PreflightResult,
+  ProviderOptions,
   SDKConfig,
-  ExplorerConfig,
-  ChainId,
   StakingConfig,
 } from "@/types";
-import type { SwapProvider } from "@/swap";
-import type { DcaProvider } from "@/dca";
 import {
   checkDeployed,
   ensureWalletReady,
+  normalizeFeeMode,
+  paymasterDetails,
   preflightTransaction,
-  sponsoredDetails,
 } from "@/wallet/utils";
+import type { WalletInterface } from "@/wallet/interface";
 import { BaseWallet } from "@/wallet/base";
 import {
-  BraavosPreset,
   BRAAVOS_IMPL_CLASS_HASH,
+  BraavosPreset,
   OpenZeppelinPreset,
 } from "@/account/presets";
+import type { LoggerConfig } from "@/logger";
 
 // Braavos factory address (same on Sepolia and Mainnet)
 const BRAAVOS_FACTORY_ADDRESS =
@@ -54,7 +56,7 @@ export { AccountProvider } from "@/wallet/accounts/provider";
 /**
  * Options for creating a Wallet.
  */
-export interface WalletOptions {
+export interface WalletOptions extends ProviderOptions {
   /** Account: either AccountProvider or { signer, accountClass? } */
   account:
     | AccountProvider
@@ -69,14 +71,31 @@ export interface WalletOptions {
   feeMode?: FeeMode;
   /** Default time bounds for paymaster transactions */
   timeBounds?: PaymasterTimeBounds;
-  /** Optional additional swap providers to register on this wallet */
-  swapProviders?: SwapProvider[];
-  /** Optional default swap provider id (must be registered) */
-  defaultSwapProviderId?: string;
-  /** Optional additional DCA providers to register on this wallet */
-  dcaProviders?: DcaProvider[];
-  /** Optional default DCA provider id (must be registered) */
-  defaultDcaProviderId?: string;
+}
+
+/**
+ * Register swap and DCA providers on a wallet from shared options.
+ */
+export function applyProviders(
+  wallet: WalletInterface,
+  options: ProviderOptions
+): void {
+  if (options.swapProviders?.length) {
+    for (const provider of options.swapProviders) {
+      wallet.registerSwapProvider(provider);
+    }
+  }
+  if (options.defaultSwapProviderId) {
+    wallet.setDefaultSwapProvider(options.defaultSwapProviderId);
+  }
+  if (options.dcaProviders?.length) {
+    for (const provider of options.dcaProviders) {
+      wallet.dca().registerProvider(provider);
+    }
+  }
+  if (options.defaultDcaProviderId) {
+    wallet.dca().setDefaultProvider(options.defaultDcaProviderId);
+  }
 }
 
 /**
@@ -98,20 +117,6 @@ export interface WalletOptions {
  * });
  * ```
  */
-/** Internal options for Wallet constructor */
-interface WalletInternals {
-  address: Address;
-  accountProvider: AccountProvider;
-  account: Account;
-  provider: RpcProvider;
-  chainId: ChainId;
-  explorerConfig?: ExplorerConfig;
-  defaultFeeMode: FeeMode;
-  defaultTimeBounds?: PaymasterTimeBounds;
-  stakingConfig: StakingConfig | undefined;
-  bridgingConfig?: BridgingConfig | undefined;
-}
-
 export class Wallet extends BaseWallet {
   private readonly provider: RpcProvider;
   private readonly account: Account;
@@ -120,17 +125,28 @@ export class Wallet extends BaseWallet {
   private readonly explorerConfig: ExplorerConfig | undefined;
   private readonly defaultFeeMode: FeeMode;
   private readonly defaultTimeBounds: PaymasterTimeBounds | undefined;
-
-  /** Cached deployment status (null = not checked yet) */
   private deployedCache: boolean | null = null;
   private deployedCacheExpiresAt = 0;
   private sponsoredDeployLock: Promise<void> | null = null;
 
-  private constructor(options: WalletInternals) {
+  private constructor(options: {
+    address: Address;
+    accountProvider: AccountProvider;
+    account: Account;
+    provider: RpcProvider;
+    chainId: ChainId;
+    explorerConfig?: ExplorerConfig;
+    defaultFeeMode: FeeMode;
+    defaultTimeBounds?: PaymasterTimeBounds;
+    stakingConfig: StakingConfig | undefined;
+    bridgingConfig?: BridgingConfig | undefined;
+    logging?: LoggerConfig;
+  }) {
     super({
       address: options.address,
       stakingConfig: options.stakingConfig,
       bridgingConfig: options.bridgingConfig,
+      ...(options.logging && { logging: options.logging }),
     });
     this.accountProvider = options.accountProvider;
     this.account = options.account;
@@ -170,10 +186,6 @@ export class Wallet extends BaseWallet {
       accountAddress: providedAddress,
       feeMode = "user_pays",
       timeBounds,
-      swapProviders,
-      defaultSwapProviderId,
-      dcaProviders,
-      defaultDcaProviderId,
     } = options;
 
     // Build or use provided AccountProvider
@@ -219,24 +231,10 @@ export class Wallet extends BaseWallet {
       ...(timeBounds && { defaultTimeBounds: timeBounds }),
       stakingConfig: options.config.staking,
       bridgingConfig: options.config.bridging,
+      ...(config.logging && { logging: config.logging }),
     });
 
-    if (swapProviders?.length) {
-      for (const swapProvider of swapProviders) {
-        wallet.registerSwapProvider(swapProvider);
-      }
-    }
-    if (defaultSwapProviderId) {
-      wallet.setDefaultSwapProvider(defaultSwapProviderId);
-    }
-    if (dcaProviders?.length) {
-      for (const dcaProvider of dcaProviders) {
-        wallet.dca().registerProvider(dcaProvider);
-      }
-    }
-    if (defaultDcaProviderId) {
-      wallet.dca().setDefaultProvider(defaultDcaProviderId);
-    }
+    applyProviders(wallet, options);
 
     return wallet;
   }
@@ -292,12 +290,11 @@ export class Wallet extends BaseWallet {
 
   async deploy(options: DeployOptions = {}): Promise<Tx> {
     this.clearDeploymentCache();
-    const feeMode = options.feeMode ?? this.defaultFeeMode;
+    const feeMode = normalizeFeeMode(options.feeMode ?? this.defaultFeeMode);
     const timeBounds = options.timeBounds ?? this.defaultTimeBounds;
 
-    if (feeMode === "sponsored") {
-      const tx = await this.deployPaymasterWith([], timeBounds);
-      return tx;
+    if (feeMode !== "user_pays") {
+      return this.deployPaymasterWith([], timeBounds, feeMode.gasToken);
     }
 
     const classHash = this.accountProvider.getClassHash();
@@ -361,21 +358,26 @@ export class Wallet extends BaseWallet {
 
   private async deployPaymasterWith(
     calls: Call[],
-    timeBounds?: PaymasterTimeBounds
+    timeBounds?: PaymasterTimeBounds,
+    gasToken?: Address
   ): Promise<Tx> {
     this.clearDeploymentCache();
     const classHash = this.accountProvider.getClassHash();
 
     // Special handling for Braavos - deploy via factory
     if (classHash === BraavosPreset.classHash) {
-      return this.deployBraavosViaFactory(calls, timeBounds);
+      return this.deployBraavosViaFactory(calls, timeBounds, gasToken);
     }
 
     // Standard deployment flow
     const deploymentData = await this.accountProvider.getDeploymentData();
     const { transaction_hash } = await this.account.executePaymasterTransaction(
       calls,
-      sponsoredDetails(timeBounds ?? this.defaultTimeBounds, deploymentData)
+      paymasterDetails({
+        feeMode: { type: "paymaster", ...(gasToken && { gasToken }) },
+        timeBounds: timeBounds ?? this.defaultTimeBounds,
+        deploymentData,
+      })
     );
     return new Tx(
       transaction_hash,
@@ -395,7 +397,8 @@ export class Wallet extends BaseWallet {
    */
   private async deployBraavosViaFactory(
     calls: Call[],
-    timeBounds?: PaymasterTimeBounds
+    timeBounds?: PaymasterTimeBounds,
+    gasToken?: Address
   ): Promise<Tx> {
     const publicKey = await this.accountProvider.getPublicKey();
     const signer = this.accountProvider.getSigner();
@@ -470,26 +473,35 @@ export class Wallet extends BaseWallet {
       ...(paymaster && { paymaster }),
     });
 
-    let transactionHash: string;
+    const allCalls = [factoryCall, ...calls];
+    const ozDeploymentData = ozDeployed
+      ? undefined
+      : await ozProvider.getDeploymentData();
+    const { transaction_hash } = await ozAccount.executePaymasterTransaction(
+      allCalls,
+      paymasterDetails({
+        feeMode: { type: "paymaster", ...(gasToken && { gasToken }) },
+        timeBounds: timeBounds ?? this.defaultTimeBounds,
+        deploymentData: ozDeploymentData,
+      })
+    );
 
-    if (ozDeployed) {
-      // OZ is deployed, just call the factory
-      const allCalls = [factoryCall, ...calls];
-      const result = await ozAccount.executePaymasterTransaction(
-        allCalls,
-        sponsoredDetails(timeBounds ?? this.defaultTimeBounds)
-      );
-      transactionHash = result.transaction_hash;
-    } else {
-      // Deploy OZ and call factory in one transaction
-      const ozDeploymentData = await ozProvider.getDeploymentData();
-      const allCalls = [factoryCall, ...calls];
-      const result = await ozAccount.executePaymasterTransaction(
-        allCalls,
-        sponsoredDetails(timeBounds ?? this.defaultTimeBounds, ozDeploymentData)
-      );
-      transactionHash = result.transaction_hash;
-    }
+    return new Tx(
+      transaction_hash,
+      this.provider,
+      this.chainId,
+      this.explorerConfig
+    );
+  }
+
+  async execute(calls: Call[], options: ExecuteOptions = {}): Promise<Tx> {
+    const feeMode = normalizeFeeMode(options.feeMode ?? this.defaultFeeMode);
+    const timeBounds = options.timeBounds ?? this.defaultTimeBounds;
+
+    const transactionHash =
+      feeMode !== "user_pays"
+        ? await this.executeSponsored(calls, timeBounds, feeMode.gasToken)
+        : await this.executeUserPays(calls);
 
     return new Tx(
       transactionHash,
@@ -499,64 +511,54 @@ export class Wallet extends BaseWallet {
     );
   }
 
-  async execute(calls: Call[], options: ExecuteOptions = {}): Promise<Tx> {
-    const feeMode = options.feeMode ?? this.defaultFeeMode;
-    const timeBounds = options.timeBounds ?? this.defaultTimeBounds;
+  private async executeUserPays(calls: Call[]): Promise<string> {
+    const deployed = await this.isDeployed();
+    if (!deployed) {
+      throw new Error(
+        'Account is not deployed. Call wallet.ensureReady({ deploy: "if_needed" }) before execute() in user_pays mode.'
+      );
+    }
+    return (await this.account.execute(calls)).transaction_hash;
+  }
 
-    let transactionHash: string;
+  private executePaymaster(
+    calls: Call[],
+    timeBounds: PaymasterTimeBounds | undefined,
+    gasToken?: Address
+  ): Promise<string> {
+    return this.account
+      .executePaymasterTransaction(
+        calls,
+        paymasterDetails({
+          feeMode: { type: "paymaster", ...(gasToken && { gasToken }) },
+          timeBounds,
+        })
+      )
+      .then((r) => r.transaction_hash);
+  }
 
-    if (feeMode === "sponsored") {
-      const deployed = await this.isDeployed();
-      if (deployed) {
-        transactionHash = (
-          await this.account.executePaymasterTransaction(
-            calls,
-            sponsoredDetails(timeBounds)
-          )
-        ).transaction_hash;
-      } else {
-        transactionHash = await this.withSponsoredDeployLock(async () => {
-          const recheckedDeployed = await this.isDeployed();
-          if (recheckedDeployed) {
-            return (
-              await this.account.executePaymasterTransaction(
-                calls,
-                sponsoredDetails(timeBounds)
-              )
-            ).transaction_hash;
-          }
-
-          try {
-            return (await this.deployPaymasterWith(calls, timeBounds)).hash;
-          } catch (error) {
-            if (!isAlreadyDeployedError(error)) {
-              throw error;
-            }
-            return (
-              await this.account.executePaymasterTransaction(
-                calls,
-                sponsoredDetails(timeBounds)
-              )
-            ).transaction_hash;
-          }
-        });
-      }
-    } else {
-      const deployed = await this.isDeployed();
-      if (!deployed) {
-        throw new Error(
-          'Account is not deployed. Call wallet.ensureReady({ deploy: "if_needed" }) before execute() in user_pays mode.'
-        );
-      }
-      transactionHash = (await this.account.execute(calls)).transaction_hash;
+  private async executeSponsored(
+    calls: Call[],
+    timeBounds: PaymasterTimeBounds | undefined,
+    gasToken?: Address
+  ): Promise<string> {
+    if (await this.isDeployed()) {
+      return this.executePaymaster(calls, timeBounds, gasToken);
     }
 
-    return new Tx(
-      transactionHash,
-      this.provider,
-      this.chainId,
-      this.explorerConfig
-    );
+    return this.withSponsoredDeployLock(async () => {
+      if (await this.isDeployed()) {
+        return this.executePaymaster(calls, timeBounds, gasToken);
+      }
+
+      try {
+        return (await this.deployPaymasterWith(calls, timeBounds, gasToken))
+          .hash;
+      } catch (error) {
+        if (!isAlreadyDeployedError(error)) throw error;
+        return this.executePaymaster(calls, timeBounds, gasToken);
+      }
+    });
   }
 
   async signMessage(typedData: TypedData): Promise<Signature> {
@@ -615,8 +617,8 @@ export class Wallet extends BaseWallet {
     return this.account.estimateInvokeFee(calls);
   }
 
-  async disconnect(): Promise<void> {
-    this.clearCaches();
+  override async disconnect(): Promise<void> {
+    await super.disconnect();
     this.clearDeploymentCache();
   }
 }

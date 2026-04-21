@@ -48,6 +48,9 @@ export * from "@/connect";
 // Troves
 export * from "@/troves";
 
+// Logger
+export type { Logger, LoggerConfig, LogLevel } from "@/logger";
+
 // Types
 export * from "@/types";
 

@@ -1,5 +1,4 @@
 import type { Call } from "starknet";
-import type { WalletInterface } from "@/wallet/interface";
 import { fromAddress, type ExecuteOptions } from "@/types";
 import type { Tx } from "@/tx";
 import type {
@@ -7,7 +6,9 @@ import type {
   TrovesStatsResponse,
   TrovesDepositCallsResponse,
   TrovesRawCall,
+  TrovesCallParams,
 } from "@/troves/types";
+import type { WalletInterface } from "@/wallet/interface";
 
 const TROVES_API_BASE = "https://app.troves.fi";
 
@@ -75,14 +76,10 @@ function validateStrategiesDiscontinuationDates(
 }
 
 function normalizeCalldata(raw: TrovesRawCall): Call {
-  const calldata = Array.isArray(raw.calldata)
-    ? raw.calldata.map((v: unknown) => {
-        if (typeof v === "bigint") return v.toString();
-        if (typeof v === "object" && v !== null) return JSON.stringify(v);
-        if (typeof v === "boolean") return v ? "1" : "0";
-        return String(v);
-      })
-    : [];
+  const calldata = raw.calldata.map((v) => {
+    if (typeof v === "boolean") return v ? "1" : "0";
+    return String(v);
+  });
   return {
     contractAddress: raw.contractAddress,
     entrypoint: raw.entrypoint,
@@ -111,11 +108,14 @@ function normalizeCalldata(raw: TrovesRawCall): Call {
  * ```
  */
 export class Troves {
-  private readonly wallet: WalletInterface;
+  private readonly wallet: Pick<WalletInterface, "address" | "execute">;
   private readonly fetcher: typeof fetch;
   private readonly timeoutMs: number;
 
-  constructor(wallet: WalletInterface, options?: TrovesOptions) {
+  constructor(
+    wallet: Pick<WalletInterface, "address" | "execute">,
+    options?: TrovesOptions
+  ) {
     this.wallet = wallet;
     this.fetcher =
       options?.fetcher ??
@@ -126,10 +126,26 @@ export class Troves {
   private async fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    const res = await this.fetcher(`${TROVES_API_BASE}${path}`, {
-      ...init,
-      signal: controller.signal,
-    }).finally(() => clearTimeout(timer));
+    let res: Response;
+    try {
+      res = await this.fetcher(`${TROVES_API_BASE}${path}`, {
+        ...init,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      const name =
+        error && typeof error === "object" && "name" in error
+          ? String((error as { name?: unknown }).name)
+          : "";
+      if (name === "AbortError") {
+        throw new Error(
+          `Troves API request to ${path} timed out after ${this.timeoutMs}ms`
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) {
       throw new Error(
         `Troves API failed: ${res.status} ${res.statusText} - ${path}`
@@ -153,18 +169,16 @@ export class Troves {
     return this.fetchJson<TrovesStatsResponse>("/api/stats");
   }
 
-  async populateDepositCalls(params: {
-    strategyId: string;
-    amountRaw: string;
-    amount2Raw?: string;
-    address?: string;
-  }): Promise<Call[]> {
+  private async populateCalls(
+    params: TrovesCallParams,
+    isDeposit: boolean
+  ): Promise<Call[]> {
     const address = params.address ?? String(this.wallet.address);
     const body = {
       strategyId: params.strategyId,
       amountRaw: params.amountRaw,
       amount2Raw: params.amount2Raw,
-      isDeposit: true,
+      isDeposit,
       address,
     };
     const data = normalizeTrovesDepositCallsResponse(
@@ -175,8 +189,9 @@ export class Troves {
       })
     );
     if (!data.success || !data.results?.length) {
+      const op = isDeposit ? "deposit" : "withdraw";
       throw new Error(
-        `Troves deposit API returned no calls for strategy "${params.strategyId}"`
+        `Troves ${op} API returned no calls for strategy "${params.strategyId}"`
       );
     }
     const calls: Call[] = [];
@@ -186,51 +201,20 @@ export class Troves {
       }
     }
     if (calls.length === 0) {
+      const op = isDeposit ? "deposit" : "withdraw";
       throw new Error(
-        `Troves deposit API returned results with no calls for strategy "${params.strategyId}"`
+        `Troves ${op} API returned results with no calls for strategy "${params.strategyId}"`
       );
     }
     return calls;
   }
 
-  async populateWithdrawCalls(params: {
-    strategyId: string;
-    amountRaw: string;
-    amount2Raw?: string;
-    address?: string;
-  }): Promise<Call[]> {
-    const address = params.address ?? String(this.wallet.address);
-    const body = {
-      strategyId: params.strategyId,
-      amountRaw: params.amountRaw,
-      amount2Raw: params.amount2Raw,
-      isDeposit: false,
-      address,
-    };
-    const data = normalizeTrovesDepositCallsResponse(
-      await this.fetchJson<TrovesDepositCallsResponse>("/api/deposits/calls", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      })
-    );
-    if (!data.success || !data.results?.length) {
-      throw new Error(
-        `Troves withdraw API returned no calls for strategy "${params.strategyId}"`
-      );
-    }
-    const calls: Call[] = [];
-    for (const result of data.results) {
-      for (const raw of result.calls) {
-        calls.push(normalizeCalldata(raw));
-      }
-    }
-    if (calls.length === 0) {
-      throw new Error(
-        `Troves withdraw API returned results with no calls for strategy "${params.strategyId}"`
-      );
-    }
-    return calls;
+  async populateDepositCalls(params: TrovesCallParams): Promise<Call[]> {
+    return this.populateCalls(params, true);
+  }
+
+  async populateWithdrawCalls(params: TrovesCallParams): Promise<Call[]> {
+    return this.populateCalls(params, false);
   }
 
   async deposit(

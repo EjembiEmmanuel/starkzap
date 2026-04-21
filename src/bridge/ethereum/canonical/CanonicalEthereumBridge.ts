@@ -2,24 +2,46 @@ import { EthereumBridge } from "@/bridge/ethereum/EthereumBridge";
 import type {
   BridgeDepositOptions,
   EthereumDepositFeeEstimation,
+  EthereumInitiateWithdrawFeeEstimation,
   EthereumTransactionDetails,
+  EthereumWalletConfig,
+  InitiateBridgeWithdrawOptions,
 } from "@/bridge";
+import { DUMMY_L1_ADDRESS, DUMMY_SN_ADDRESS } from "@/bridge/ethereum/types";
 import {
+  type Address,
+  Amount,
   type EthereumAddress,
+  EthereumBridgeToken,
+  type ExternalAddress,
   type ExternalTransactionResponse,
-  fromAddress,
 } from "@/types";
 import { ethereumAddress } from "@/bridge/ethereum/EtherToken";
-import { type ContractTransaction, toBigInt } from "ethers";
-import { type Address, Amount } from "@/types";
-import { RPC, uint256 } from "starknet";
+import { type ContractTransaction, type InterfaceAbi } from "ethers";
+import { type Call, CallData, RPC, uint256 } from "starknet";
 import { FeeErrorCause } from "@/types/errors";
+import type { WalletInterface } from "@/wallet";
+import {
+  type AutoWithdrawFeeOutput,
+  AutoWithdrawFeesHandler,
+} from "@/bridge/utils/auto-withdraw-fees-handler";
+import CANONICAL_BRIDGE_ABI from "@/abi/ethereum/canonicalBridge.json";
+import type { Tx } from "@/tx";
+import type { StarkZapLogger } from "@/logger";
 
 export class CanonicalEthereumBridge extends EthereumBridge {
-  private static readonly DUMMY_SN_ADDRESS = fromAddress(
-    "0x023123100123103023123acb1231231231231031231ca123f23123123123100a"
-  );
   private static readonly DEFAULT_ESTIMATED_DEPOSIT_GAS_REQUIREMENT = 154744n;
+
+  constructor(
+    bridgeToken: EthereumBridgeToken,
+    config: EthereumWalletConfig,
+    starknetWallet: WalletInterface,
+    private readonly autoWithdrawFeesHandler: AutoWithdrawFeesHandler,
+    logger: StarkZapLogger,
+    bridgeAbi: InterfaceAbi = CANONICAL_BRIDGE_ABI
+  ) {
+    super(bridgeToken, config, starknetWallet, logger, bridgeAbi);
+  }
 
   async deposit(
     recipient: Address,
@@ -53,10 +75,7 @@ export class CanonicalEthereumBridge extends EthereumBridge {
     const [allowance, l1ToL2MessageFee, approvalFeeEstimation] =
       await Promise.all([
         this.getAllowance(),
-        this.estimateL1ToL2MessageFee(
-          CanonicalEthereumBridge.DUMMY_SN_ADDRESS,
-          minimalAmount
-        ),
+        this.estimateL1ToL2MessageFee(DUMMY_SN_ADDRESS, minimalAmount),
         this.estimateApprovalFee(),
       ]);
 
@@ -74,7 +93,7 @@ export class CanonicalEthereumBridge extends EthereumBridge {
       l1Fee = this.ethAmount(feeDecimal);
     } else {
       const details = await this.prepareDepositTransactionDetails(
-        CanonicalEthereumBridge.DUMMY_SN_ADDRESS,
+        DUMMY_SN_ADDRESS,
         minimalAmount
       );
       const tx = await this.populateTransaction(details);
@@ -91,6 +110,101 @@ export class CanonicalEthereumBridge extends EthereumBridge {
       approvalFee,
       approvalFeeError,
     };
+  }
+
+  async initiateWithdraw(
+    recipient: ExternalAddress,
+    amount: Amount,
+    options?: InitiateBridgeWithdrawOptions
+  ): Promise<Tx> {
+    if (options?.protocol === "canonical" && options.autoWithdraw) {
+      if (!this.bridgeToken.supportsAutoWithdraw) {
+        throw new Error(
+          `"autoWithdraw" was provided but token ${this.bridgeToken.name} does not support auto-withdrawals.`
+        );
+      }
+
+      const feeData = await this.autoWithdrawFeesHandler.getFeeData({
+        bridgeToken: this.bridgeToken,
+        amount,
+        walletOrAddress: this.starknetWallet,
+        preferredFeeToken: options.preferredFeeToken,
+      });
+
+      const autoWithdraw = await this.getAutoWithdrawTransferCall(feeData);
+      const initiateWithdraw = this.buildInitiateWithdrawCall(
+        recipient.toString(),
+        amount
+      );
+
+      return this.starknetWallet.execute(
+        [autoWithdraw, initiateWithdraw],
+        options
+      );
+    }
+
+    return super.initiateWithdraw(recipient, amount, options);
+  }
+
+  async getInitiateWithdrawFeeEstimate(
+    options?: InitiateBridgeWithdrawOptions
+  ): Promise<EthereumInitiateWithdrawFeeEstimation> {
+    const calls: Call[] = [];
+    const minAmount = await this.token.amount(1n);
+
+    let autoWithdrawFee: Amount | undefined = undefined;
+    let autoWithdrawFeeError: FeeErrorCause | undefined;
+    if (options?.protocol === "canonical" && options.autoWithdraw) {
+      if (!this.bridgeToken.supportsAutoWithdraw) {
+        throw new Error(
+          `"autoWithdraw" was provided but token ${this.bridgeToken.name} does not support auto-withdrawals.`
+        );
+      }
+
+      try {
+        const feeData = await this.autoWithdrawFeesHandler.getFeeData({
+          bridgeToken: this.bridgeToken,
+          amount: minAmount,
+          walletOrAddress: this.starknetWallet,
+          preferredFeeToken: options.preferredFeeToken,
+        });
+
+        autoWithdrawFee = feeData.preselectedGasToken.cost;
+        autoWithdrawFeeError = undefined;
+
+        calls.push(await this.getAutoWithdrawTransferCall(feeData));
+      } catch (e) {
+        this.logger.debug(
+          "[CanonicalEthereumBridge] getAutoWithdrawTransferCall failed:",
+          e
+        );
+        autoWithdrawFee = undefined;
+        autoWithdrawFeeError = FeeErrorCause.AW_FEE_ERROR;
+      }
+    }
+
+    calls.push(this.buildInitiateWithdrawCall(DUMMY_L1_ADDRESS, minAmount));
+
+    try {
+      const estimate = await this.starknetWallet.estimateFee(calls);
+      const isFri = estimate.unit === "FRI";
+      return {
+        l2Fee: Amount.fromRaw(estimate.overall_fee, 18, isFri ? "STRK" : "ETH"),
+        autoWithdrawFee,
+        autoWithdrawFeeError,
+      };
+    } catch (e) {
+      this.logger.debug(
+        "[CanonicalEthereumBridge] getInitiateWithdrawFeeEstimate (L2 fee) failed:",
+        e
+      );
+      return {
+        l2Fee: Amount.fromRaw(0n, 18, "STRK"),
+        l2FeeError: FeeErrorCause.GENERIC_L2_FEE_ERROR,
+        autoWithdrawFee,
+        autoWithdrawFeeError,
+      };
+    }
   }
 
   protected async getEthereumGasPrice(): Promise<bigint> {
@@ -153,7 +267,11 @@ export class CanonicalEthereumBridge extends EthereumBridge {
       );
 
       return { fee };
-    } catch {
+    } catch (e) {
+      this.logger.debug(
+        "[CanonicalEthereumBridge] estimateL1ToL2MessageFee failed:",
+        e
+      );
       return {
         fee: Amount.fromRaw(0n, 18, "ETH"),
         l2FeeError: FeeErrorCause.GENERIC_L2_FEE_ERROR,
@@ -170,23 +288,16 @@ export class CanonicalEthereumBridge extends EthereumBridge {
         this.getEthereumGasPrice(),
       ]);
       return { gasFee: this.ethAmount(gasUnits * gasPrice) };
-    } catch {
+    } catch (e) {
+      this.logger.debug(
+        "[CanonicalEthereumBridge] estimateEthereumGasFeeForTx failed:",
+        e
+      );
       return {
         gasFee: this.ethAmount(0n),
         error: FeeErrorCause.GENERIC_L1_FEE_ERROR,
       };
     }
-  }
-
-  private async estimateEthereumSafeGasLimitForTx(
-    tx: ContractTransaction
-  ): Promise<bigint> {
-    const estimated = await this.config.provider.estimateGas(tx);
-    return (
-      (estimated *
-        toBigInt(Math.ceil(EthereumBridge.GAS_LIMIT_SAFE_MULTIPLIER * 100))) /
-      100n
-    );
   }
 
   protected async getEthDepositValue(
@@ -199,5 +310,21 @@ export class CanonicalEthereumBridge extends EthereumBridge {
       ? amount
       : this.ethAmount(0n);
     return fee.add(bridgedEthAmount);
+  }
+
+  protected async getAutoWithdrawTransferCall(
+    feeData: AutoWithdrawFeeOutput
+  ): Promise<Call> {
+    const feeTokenAddress = feeData.preselectedGasToken.tokenAddress;
+    const gasCost = feeData.preselectedGasToken.cost;
+
+    return {
+      contractAddress: feeTokenAddress,
+      entrypoint: "transfer",
+      calldata: CallData.compile({
+        user: feeData.relayerAddress,
+        amount: uint256.bnToUint256(gasCost.toBase()),
+      }),
+    };
   }
 }

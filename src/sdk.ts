@@ -1,5 +1,12 @@
 import { type Call, type PaymasterTimeBounds, RpcProvider } from "starknet";
-import { ChainId, getChainId, type SDKConfig } from "@/types/config";
+import {
+  type BridgingConfig,
+  ChainId,
+  type ExplorerConfig,
+  getChainId,
+  type SDKConfig,
+  type StakingConfig,
+} from "@/types/config";
 import type { ConnectWalletOptions, FeeMode } from "@/types/wallet";
 import { type NetworkPreset, networks } from "@/network";
 import { Wallet } from "@/wallet";
@@ -27,6 +34,8 @@ import {
   OpenZeppelinPreset,
 } from "@/account";
 import { BridgeTokenRepository } from "@/bridge/tokens/repository";
+import type { LoggerConfig } from "@/logger";
+import { createLogger } from "@/logger";
 
 /** Resolved SDK configuration with required rpcUrl and chainId */
 interface ResolvedConfig extends Omit<SDKConfig, "rpcUrl" | "chainId"> {
@@ -160,7 +169,18 @@ export class StarkZap {
     return this.config.staking;
   }
 
-  private async ensureProviderChainMatchesConfig(): Promise<void> {
+  protected getResolvedConfig(): Readonly<{
+    bridging?: BridgingConfig;
+    chainId: ChainId;
+    explorer?: ExplorerConfig;
+    logging?: LoggerConfig;
+    rpcUrl: string;
+    staking?: StakingConfig;
+  }> {
+    return this.config;
+  }
+
+  protected async ensureProviderChainMatchesConfig(): Promise<void> {
     if (!this.chainValidationPromise) {
       this.chainValidationPromise = (async () => {
         const providerChainId = await getChainId(this.provider);
@@ -212,7 +232,7 @@ export class StarkZap {
    * // With sponsored transactions
    * const wallet = await sdk.connectWallet({
    *   account: { signer: new StarkSigner(privateKey) },
-   *   feeMode: "sponsored",
+   *   feeMode: { type: "paymaster" },
    * });
    * ```
    */
@@ -446,6 +466,7 @@ export class StarkZap {
         rpcUrl: this.config.rpcUrl,
         chainId: this.config.chainId,
         ...(explorer && { explorer }),
+        ...(this.config.logging && { logging: this.config.logging }),
       },
       this.config.staking,
       this.config.bridging
@@ -524,7 +545,9 @@ export class StarkZap {
    */
   async getBridgingTokens(chain?: ExternalChain): Promise<BridgeToken[]> {
     if (!this.bridgeTokenRepository) {
-      this.bridgeTokenRepository = new BridgeTokenRepository();
+      this.bridgeTokenRepository = new BridgeTokenRepository({
+        logger: createLogger(this.config.logging),
+      });
     }
 
     const env = this.config.chainId.isMainnet() ? "mainnet" : "testnet";

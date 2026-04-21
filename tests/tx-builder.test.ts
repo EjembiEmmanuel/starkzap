@@ -514,7 +514,7 @@ describe("TxBuilder", () => {
       });
 
       await expect(new TxBuilder(wallet).swap(request).calls()).rejects.toThrow(
-        "Swap returned no calls"
+        'Swap action "swap" returned no calls'
       );
     });
   });
@@ -1107,7 +1107,7 @@ describe("TxBuilder", () => {
 
     it("should pass execute options through", async () => {
       const wallet = createMockWallet();
-      const options = { feeMode: "sponsored" as const };
+      const options = { feeMode: { type: "paymaster" } as const };
 
       await new TxBuilder(wallet).add(rawCall).send(options);
 

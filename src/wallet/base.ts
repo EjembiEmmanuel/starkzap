@@ -2,13 +2,16 @@ import type { WalletInterface } from "@/wallet/interface";
 import {
   type Address,
   Amount,
+  type BridgeCompleteWithdrawFeeEstimation,
   type BridgeDepositFeeEstimation,
+  type BridgeInitiateWithdrawFeeEstimation,
   BridgeToken,
   type BridgingConfig,
   type ChainId,
   type DeployOptions,
   type EnsureReadyOptions,
   type ExecuteOptions,
+  type ExternalAddress,
   type ExternalTransactionResponse,
   type FeeMode,
   type PoolMember,
@@ -17,6 +20,16 @@ import {
   type StakingConfig,
   type Token,
 } from "@/types";
+import type { LoggerConfig } from "@/logger";
+import { createLogger, type StarkZapLogger } from "@/logger";
+import {
+  type DepositMonitorResult,
+  type DepositState,
+  type DepositStateInput,
+  type WithdrawalState,
+  type WithdrawalStateInput,
+  type WithdrawMonitorResult,
+} from "@/bridge/monitor/types";
 import type { Tx } from "@/tx";
 import { TxBuilder } from "@/tx/builder";
 import type {
@@ -28,8 +41,8 @@ import type {
   TypedData,
 } from "starknet";
 import { Erc20 } from "@/erc20";
-import { Staking } from "@/staking";
-import type { PreparedSwap, SwapInput, SwapQuote, SwapProvider } from "@/swap";
+import { Staking, EndurStaking, type EndurStakingOptions } from "@/staking";
+import type { PreparedSwap, SwapInput, SwapProvider, SwapQuote } from "@/swap";
 import { AvnuSwapProvider } from "@/swap";
 import { resolveSwapInput } from "@/swap/utils";
 import {
@@ -43,8 +56,13 @@ import {
   type LendingProvider,
   VesuLendingProvider,
 } from "@/lending";
-import { BridgeOperator } from "@/bridge";
-import type { BridgeDepositOptions } from "@/bridge/types/BridgeInterface";
+import { ProviderRegistry } from "@/providers/registry";
+import { BridgeOperator } from "@/bridge/operator/BridgeOperator";
+import type {
+  BridgeDepositOptions,
+  CompleteBridgeWithdrawOptions,
+  InitiateBridgeWithdrawOptions,
+} from "@/bridge/types/BridgeInterface";
 import type { ConnectedExternalWallet } from "@/connect";
 
 const MAX_ERC20_CACHE_SIZE = 128;
@@ -82,6 +100,9 @@ export abstract class BaseWallet implements WalletInterface {
   /** Staking configuration, required for staking operations */
   private readonly stakingConfig: StakingConfig | undefined;
 
+  /** Internal SDK logger, threaded from StarkZap configuration. */
+  protected readonly logger: StarkZapLogger;
+
   /**
    * Cache of Erc20 instances keyed by token address.
    * Prevents creating multiple instances for the same token.
@@ -94,6 +115,7 @@ export abstract class BaseWallet implements WalletInterface {
    */
   private stakingMap: Map<Address, Staking> = new Map();
   private stakingInFlight: Map<Address, Promise<Staking>> = new Map();
+  private lstStakingMap: Map<string, EndurStaking> = new Map();
 
   private readonly bridging: BridgeOperator;
 
@@ -110,13 +132,21 @@ export abstract class BaseWallet implements WalletInterface {
     defaultSwapProvider?: SwapProvider | undefined;
     defaultLendingProvider?: LendingProvider | undefined;
     defaultDcaProvider?: DcaProvider | undefined;
+    logging?: LoggerConfig;
   }) {
     this.address = options.address;
     this.stakingConfig = options.stakingConfig;
-    this.bridging = new BridgeOperator(this, options.bridgingConfig);
-    this.swapProviders = new Map();
-    const provider = options.defaultSwapProvider ?? new AvnuSwapProvider();
-    this.registerSwapProvider(provider, true);
+    this.logger = createLogger(options.logging);
+    this.bridging = new BridgeOperator(
+      this,
+      options.bridgingConfig,
+      this.logger
+    );
+    this.swapRegistry = new ProviderRegistry("swap");
+    this.swapRegistry.register(
+      options.defaultSwapProvider ?? new AvnuSwapProvider(),
+      true
+    );
     this.lendingClient = new LendingClient(
       {
         address: this.address,
@@ -140,59 +170,26 @@ export abstract class BaseWallet implements WalletInterface {
     );
   }
 
-  /** Registered swap providers by id. */
-  private readonly swapProviders: Map<string, SwapProvider>;
-  private defaultSwapProviderId: string | null = null;
+  private readonly swapRegistry: ProviderRegistry<SwapProvider>;
   private readonly lendingClient: LendingClient;
   private readonly dcaClient: DcaClient;
 
-  // ============================================================
-  // Abstract methods - children MUST implement
-  // ============================================================
-
-  /** @inheritdoc */
   abstract isDeployed(): Promise<boolean>;
-
-  /** @inheritdoc */
   abstract ensureReady(options?: EnsureReadyOptions): Promise<void>;
-
-  /** @inheritdoc */
   abstract deploy(options?: DeployOptions): Promise<Tx>;
-
-  /** @inheritdoc */
   abstract execute(calls: Call[], options?: ExecuteOptions): Promise<Tx>;
+  abstract signMessage(typedData: TypedData): Promise<Signature>;
+  abstract preflight(options: PreflightOptions): Promise<PreflightResult>;
+  abstract getAccount(): Account;
+  abstract getProvider(): RpcProvider;
+  abstract getChainId(): ChainId;
+  abstract getFeeMode(): FeeMode;
+  abstract getClassHash(): string;
+  abstract estimateFee(calls: Call[]): Promise<EstimateFeeResponseOverhead>;
 
-  /** @inheritdoc */
   callContract(call: Call): ReturnType<RpcProvider["callContract"]> {
     return this.getProvider().callContract(call);
   }
-
-  /** @inheritdoc */
-  abstract signMessage(typedData: TypedData): Promise<Signature>;
-
-  /** @inheritdoc */
-  abstract preflight(options: PreflightOptions): Promise<PreflightResult>;
-
-  /** @inheritdoc */
-  abstract getAccount(): Account;
-
-  /** @inheritdoc */
-  abstract getProvider(): RpcProvider;
-
-  /** @inheritdoc */
-  abstract getChainId(): ChainId;
-
-  /** @inheritdoc */
-  abstract getFeeMode(): FeeMode;
-
-  /** @inheritdoc */
-  abstract getClassHash(): string;
-
-  /** @inheritdoc */
-  abstract estimateFee(calls: Call[]): Promise<EstimateFeeResponseOverhead>;
-
-  /** @inheritdoc */
-  abstract disconnect(): Promise<void>;
 
   // ============================================================
   // Transaction builder
@@ -273,63 +270,44 @@ export abstract class BaseWallet implements WalletInterface {
   }
 
   registerSwapProvider(provider: SwapProvider, makeDefault = false): void {
-    this.swapProviders.set(provider.id, provider);
-    if (makeDefault || this.defaultSwapProviderId == null) {
-      this.defaultSwapProviderId = provider.id;
-    }
+    this.swapRegistry.register(provider, makeDefault);
   }
 
   setDefaultSwapProvider(providerId: string): void {
-    if (!this.swapProviders.has(providerId)) {
-      throw new Error(
-        `Unknown swap provider "${providerId}". Registered providers: ${this.listSwapProviders().join(", ")}`
-      );
-    }
-    this.defaultSwapProviderId = providerId;
+    this.swapRegistry.setDefault(providerId);
   }
 
   getSwapProvider(providerId: string): SwapProvider {
-    const provider = this.swapProviders.get(providerId);
-    if (!provider) {
-      throw new Error(
-        `Unknown swap provider "${providerId}". Registered providers: ${this.listSwapProviders().join(", ")}`
-      );
-    }
-    return provider;
+    return this.swapRegistry.get(providerId);
   }
 
   listSwapProviders(): string[] {
-    return Array.from(this.swapProviders.keys());
+    return this.swapRegistry.list();
   }
 
   getDefaultSwapProvider(): SwapProvider {
-    if (!this.defaultSwapProviderId) {
-      throw new Error("No default swap provider configured");
-    }
-    return this.getSwapProvider(this.defaultSwapProviderId);
-  }
-
-  protected clearCaches(): void {
-    this.erc20s.clear();
-    this.stakingMap.clear();
-    this.stakingInFlight.clear();
+    return this.swapRegistry.getDefault();
   }
 
   private assertSwapCalls(calls: Call[], source?: string): void {
-    if (calls.length) {
-      return;
-    }
-    if (source) {
-      throw new Error(`Swap ${source} returned no calls`);
-    }
-    throw new Error("Swap returned no calls");
+    if (calls.length) return;
+    throw new Error(
+      source ? `Swap ${source} returned no calls` : "Swap returned no calls"
+    );
   }
 
-  private evictOldest<K, V>(cache: Map<K, V>): void {
-    const oldest = cache.keys().next().value;
-    if (oldest !== undefined) {
-      cache.delete(oldest);
+  private evictFirst<K, V>(cache: Map<K, V>): void {
+    const firstKey = cache.keys().next().value;
+    if (firstKey !== undefined) {
+      cache.delete(firstKey);
     }
+  }
+
+  async disconnect(): Promise<void> {
+    this.erc20s.clear();
+    this.stakingMap.clear();
+    this.stakingInFlight.clear();
+    this.bridging.dispose();
   }
 
   // ============================================================
@@ -349,7 +327,7 @@ export abstract class BaseWallet implements WalletInterface {
     let erc20 = this.erc20s.get(token.address);
     if (!erc20) {
       if (this.erc20s.size >= MAX_ERC20_CACHE_SIZE) {
-        this.evictOldest(this.erc20s);
+        this.evictFirst(this.erc20s);
       }
       erc20 = new Erc20(token, this.getProvider());
       this.erc20s.set(token.address, erc20);
@@ -678,18 +656,22 @@ export abstract class BaseWallet implements WalletInterface {
     return await staking.getCommission();
   }
 
-  /**
-   * Asserts that staking configuration is available.
-   *
-   * @returns The staking configuration
-   * @throws Error if staking configuration was not provided to the SDK
-   */
   private assertStakingConfig(): StakingConfig {
     if (!this.stakingConfig) {
       throw new Error("`stakingConfig` is not defined in the sdk config.");
     }
-
     return this.stakingConfig;
+  }
+
+  private cacheStaking(poolAddress: Address, staking: Staking): Staking {
+    if (
+      this.stakingMap.size >= MAX_STAKING_CACHE_SIZE &&
+      !this.stakingMap.has(poolAddress)
+    ) {
+      this.evictFirst(this.stakingMap);
+    }
+    this.stakingMap.set(poolAddress, staking);
+    return staking;
   }
 
   /**
@@ -714,28 +696,14 @@ export abstract class BaseWallet implements WalletInterface {
    */
   async staking(poolAddress: Address): Promise<Staking> {
     const config = this.assertStakingConfig();
-
     const cached = this.stakingMap.get(poolAddress);
-    if (cached) {
-      return cached;
-    }
-
+    if (cached) return cached;
     const inFlight = this.stakingInFlight.get(poolAddress);
-    if (inFlight) {
-      return inFlight;
-    }
+    if (inFlight) return inFlight;
 
     const loading = Staking.fromPool(poolAddress, this.getProvider(), config)
-      .then((staking) => {
-        if (this.stakingMap.size >= MAX_STAKING_CACHE_SIZE) {
-          this.evictOldest(this.stakingMap);
-        }
-        this.stakingMap.set(poolAddress, staking);
-        return staking;
-      })
-      .finally(() => {
-        this.stakingInFlight.delete(poolAddress);
-      });
+      .then((s) => this.cacheStaking(poolAddress, s))
+      .finally(() => this.stakingInFlight.delete(poolAddress));
 
     this.stakingInFlight.set(poolAddress, loading);
     return loading;
@@ -768,57 +736,21 @@ export abstract class BaseWallet implements WalletInterface {
     token: Token
   ): Promise<Staking> {
     const config = this.assertStakingConfig();
-
     const staking = await Staking.fromStaker(
       stakerAddress,
       token,
       this.getProvider(),
       config
     );
-
-    const poolAddress = staking.poolAddress;
-    if (this.stakingMap.size >= MAX_STAKING_CACHE_SIZE) {
-      this.evictOldest(this.stakingMap);
-    }
-    this.stakingMap.set(poolAddress, staking);
-    this.stakingInFlight.delete(poolAddress);
-
-    return staking;
+    return this.cacheStaking(staking.poolAddress, staking);
   }
 
   // ============================================================
   // Bridging delegated methods
+  // ({@link WalletInterface}; implementation delegates to an internal {@link BridgeOperator})
   // ============================================================
 
-  /**
-   * Bridge tokens from an external chain into Starknet.
-   *
-   * Uses the connected external wallet to execute the L1/source-chain deposit
-   * transaction. For ERC20 tokens, allowance approval is handled automatically
-   * when required by the selected bridge protocol.
-   *
-   * @param recipient - Starknet address to receive bridged funds
-   * @param amount - Amount to bridge
-   * @param token - Bridge token descriptor (chain, protocol, bridge contracts)
-   * @param externalWallet - Connected external wallet on the token source chain
-   * @param options - Optional bridge/protocol-specific deposit options
-   * @returns External transaction response containing the source-chain tx hash
-   *
-   * @throws Error if token chain and external wallet chain do not match
-   * @throws Error if protocol-specific configuration is missing
-   * @throws Error if the external transaction is rejected or fails
-   *
-   * @example
-   * ```ts
-   * const tx = await wallet.deposit(
-   *   wallet.address,
-   *   Amount.parse("25", USDC),
-   *   bridgeToken,
-   *   externalWallet
-   * );
-   * console.log(tx.hash);
-   * ```
-   */
+  /** {@inheritDoc WalletInterface.deposit} */
   deposit(
     recipient: Address,
     amount: Amount,
@@ -835,25 +767,7 @@ export abstract class BaseWallet implements WalletInterface {
     );
   }
 
-  /**
-   * Get the currently available external balance that can be deposited.
-   *
-   * Reads the available source-chain balance for the provided bridge token
-   * and connected external wallet.
-   *
-   * @param token - Bridge token descriptor to query
-   * @param externalWallet - Connected external wallet on the token source chain
-   * @returns Available deposit balance on the external chain
-   *
-   * @throws Error if token chain and external wallet chain do not match
-   * @throws Error if the bridge protocol is unsupported for the token
-   *
-   * @example
-   * ```ts
-   * const available = await wallet.getDepositBalance(bridgeToken, externalWallet);
-   * console.log(available.toFormatted());
-   * ```
-   */
+  /** {@inheritDoc WalletInterface.getDepositBalance} */
   getDepositBalance(
     token: BridgeToken,
     externalWallet: ConnectedExternalWallet
@@ -861,27 +775,7 @@ export abstract class BaseWallet implements WalletInterface {
     return this.bridging.getDepositBalance(token, externalWallet);
   }
 
-  /**
-   * Get the ERC20 allowance granted to the bridge spender on the external chain.
-   *
-   * Returns `null` when allowance is not applicable (for example, native token
-   * flows or protocols that do not expose a spender).
-   *
-   * @param token - Bridge token descriptor to query
-   * @param externalWallet - Connected external wallet on the token source chain
-   * @returns Current allowance, or `null` if allowance is not applicable
-   *
-   * @throws Error if token chain and external wallet chain do not match
-   * @throws Error if spender discovery or provider calls fail
-   *
-   * @example
-   * ```ts
-   * const allowance = await wallet.getAllowance(bridgeToken, externalWallet);
-   * if (allowance) {
-   *   console.log(allowance.toFormatted());
-   * }
-   * ```
-   */
+  /** {@inheritDoc WalletInterface.getAllowance} */
   getAllowance(
     token: BridgeToken,
     externalWallet: ConnectedExternalWallet
@@ -889,31 +783,139 @@ export abstract class BaseWallet implements WalletInterface {
     return this.bridging.getAllowance(token, externalWallet);
   }
 
-  /**
-   * Estimate bridging fees on the source chain and destination messaging layer.
-   *
-   * This includes protocol-specific components such as approval fee,
-   * source-chain execution fee, and interchain/L2 delivery fee.
-   *
-   * @param token - Bridge token descriptor to estimate for
-   * @param externalWallet - Connected external wallet on the token source chain
-   * @param options - Optional bridge/protocol-specific estimation options
-   * @returns Detailed bridge fee estimation for the current route
-   *
-   * @throws Error if token chain and external wallet chain do not match
-   * @throws Error if required bridge configuration is missing
-   *
-   * @example
-   * ```ts
-   * const fees = await wallet.getDepositFeeEstimate(bridgeToken, externalWallet);
-   * console.log(fees.l1Fee.toFormatted(), fees.l2Fee.toFormatted());
-   * ```
-   */
+  /** {@inheritDoc WalletInterface.getDepositFeeEstimate} */
   getDepositFeeEstimate(
     token: BridgeToken,
     externalWallet: ConnectedExternalWallet,
     options?: BridgeDepositOptions
   ): Promise<BridgeDepositFeeEstimation> {
     return this.bridging.getDepositFeeEstimate(token, externalWallet, options);
+  }
+
+  /**
+   * Get an EndurStaking instance for an LST asset (e.g. "STRK", "WBTC").
+   *
+   * Instances are cached by asset symbol. `EndurStaking` mirrors the `Staking`
+   * API — use `enter`, `exitIntent`, `getPosition`, etc.
+   */
+  lstStaking(asset: string, options?: EndurStakingOptions): EndurStaking {
+    const key = asset.toLowerCase();
+    const cached = this.lstStakingMap.get(key);
+    if (cached) return cached;
+
+    const instance = EndurStaking.from(
+      asset,
+      this.getProvider(),
+      this.getChainId(),
+      options
+    );
+    this.lstStakingMap.set(key, instance);
+    return instance;
+  }
+
+  /** {@inheritDoc WalletInterface.initiateWithdraw} */
+  initiateWithdraw(
+    recipient: ExternalAddress,
+    amount: Amount,
+    token: BridgeToken,
+    externalWallet: ConnectedExternalWallet,
+    options?: InitiateBridgeWithdrawOptions
+  ): Promise<Tx> {
+    return this.bridging.initiateWithdraw(
+      recipient,
+      amount,
+      token,
+      externalWallet,
+      options
+    );
+  }
+
+  /** {@inheritDoc WalletInterface.getWithdrawBalance} */
+  getWithdrawBalance(
+    token: BridgeToken,
+    externalWallet: ConnectedExternalWallet
+  ): Promise<Amount> {
+    return this.bridging.getWithdrawBalance(token, externalWallet);
+  }
+
+  /** {@inheritDoc WalletInterface.getInitiateWithdrawFeeEstimate} */
+  getInitiateWithdrawFeeEstimate(
+    token: BridgeToken,
+    externalWallet: ConnectedExternalWallet,
+    options?: InitiateBridgeWithdrawOptions
+  ): Promise<BridgeInitiateWithdrawFeeEstimation> {
+    return this.bridging.getInitiateWithdrawFeeEstimate(
+      token,
+      externalWallet,
+      options
+    );
+  }
+
+  /** {@inheritDoc WalletInterface.completeWithdraw} */
+  completeWithdraw(
+    recipient: ExternalAddress,
+    amount: Amount,
+    token: BridgeToken,
+    externalWallet: ConnectedExternalWallet,
+    options?: CompleteBridgeWithdrawOptions
+  ): Promise<ExternalTransactionResponse> {
+    return this.bridging.completeWithdraw(
+      recipient,
+      amount,
+      token,
+      externalWallet,
+      options
+    );
+  }
+
+  /** {@inheritDoc WalletInterface.getCompleteWithdrawFeeEstimate} */
+  getCompleteWithdrawFeeEstimate(
+    amount: Amount,
+    recipient: ExternalAddress,
+    token: BridgeToken,
+    externalWallet: ConnectedExternalWallet,
+    options?: CompleteBridgeWithdrawOptions
+  ): Promise<BridgeCompleteWithdrawFeeEstimation> {
+    return this.bridging.getCompleteWithdrawFeeEstimate(
+      amount,
+      recipient,
+      token,
+      externalWallet,
+      options
+    );
+  }
+
+  /** {@inheritDoc WalletInterface.monitorDeposit} */
+  monitorDeposit(
+    token: BridgeToken,
+    externalTxHash: string,
+    starknetTxHash?: string
+  ): Promise<DepositMonitorResult> {
+    return this.bridging.monitorDeposit(token, externalTxHash, starknetTxHash);
+  }
+
+  /** {@inheritDoc WalletInterface.monitorWithdrawal} */
+  monitorWithdrawal(
+    token: BridgeToken,
+    snTxHash: string,
+    externalTxHash?: string
+  ): Promise<WithdrawMonitorResult> {
+    return this.bridging.monitorWithdrawal(token, snTxHash, externalTxHash);
+  }
+
+  /** {@inheritDoc WalletInterface.getDepositState} */
+  getDepositState(
+    token: BridgeToken,
+    param: DepositStateInput
+  ): Promise<DepositState> {
+    return this.bridging.getDepositState(token, param);
+  }
+
+  /** {@inheritDoc WalletInterface.getWithdrawalState} */
+  getWithdrawalState(
+    token: BridgeToken,
+    param: WithdrawalStateInput
+  ): Promise<WithdrawalState> {
+    return this.bridging.getWithdrawalState(token, param);
   }
 }

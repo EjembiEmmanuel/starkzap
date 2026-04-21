@@ -42,7 +42,8 @@ export interface TrovesStrategyAPIResult {
   isDeprecated?: boolean;
   lastAumUpdate?: string;
   discontinuationInfo?: {
-    date?: string;
+    // Troves API boundary: can be omitted or null.
+    date?: string | null;
     reason?: unknown;
     info?: unknown;
   };
@@ -67,6 +68,13 @@ export interface TrovesRawCall {
   contractAddress: Address;
   entrypoint: string;
   calldata: (string | number | boolean)[];
+}
+
+export interface TrovesCallParams {
+  strategyId: string;
+  amountRaw: string;
+  amount2Raw?: string;
+  address?: string;
 }
 
 export interface TrovesCallTokenInfo {

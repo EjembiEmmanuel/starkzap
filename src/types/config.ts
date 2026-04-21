@@ -1,16 +1,21 @@
 import {
+  CairoFelt252,
   type PaymasterOptions,
   RpcProvider,
-  CairoFelt252,
   constants,
 } from "starknet";
 import type { NetworkPreset, NetworkName } from "@/network";
+import type { LoggerConfig } from "@/logger";
 import type { Address } from "@/types";
 
 /** Supported Starknet chain identifiers */
 export type ChainIdLiteral = "SN_MAIN" | "SN_SEPOLIA";
 
 const VALID_CHAIN_IDS: readonly string[] = ["SN_MAIN", "SN_SEPOLIA"];
+
+function decodeFelt252ToShortString(felt252: string): string {
+  return new CairoFelt252(felt252).decodeUtf8();
+}
 
 /**
  * Represents a Starknet chain identifier.
@@ -83,7 +88,7 @@ export class ChainId {
    * @throws Error if the decoded value is not a supported chain
    */
   static fromFelt252(felt252: string): ChainId {
-    const decoded = new CairoFelt252(felt252).decodeUtf8();
+    const decoded = decodeFelt252ToShortString(felt252);
     if (!VALID_CHAIN_IDS.includes(decoded)) {
       throw new Error(
         `Unsupported chain ID: "${decoded}". Expected one of: ${VALID_CHAIN_IDS.join(", ")}`
@@ -110,6 +115,10 @@ export type ExplorerProvider = "voyager" | "starkscan";
 /**
  * Configuration for building explorer URLs.
  *
+ * Choose **one** of:
+ * - A known provider name (Voyager or Starkscan)
+ * - A custom base URL
+ *
  * @example
  * ```ts
  * // Use a known provider
@@ -119,12 +128,9 @@ export type ExplorerProvider = "voyager" | "starkscan";
  * { baseUrl: "https://my-explorer.com" }
  * ```
  */
-export interface ExplorerConfig {
-  /** Use a known explorer provider */
-  provider?: ExplorerProvider;
-  /** Or provide a custom base URL (takes precedence over provider) */
-  baseUrl?: string;
-}
+export type ExplorerConfig =
+  | { provider: ExplorerProvider; baseUrl?: never }
+  | { baseUrl: string; provider?: never };
 
 /**
  * Configuration for the Staking module.
@@ -239,4 +245,27 @@ export interface SDKConfig {
    * @see {@link BridgingConfig}
    */
   bridging?: BridgingConfig;
+
+  /**
+   * Optional logging configuration for SDK diagnostics.
+   *
+   * Provide a {@link LoggerConfig} with a `logger` (e.g. `console`, pino)
+   * and an optional `logLevel` to control verbosity.
+   *
+   * Silent by default (no-op). When provided without `logLevel`,
+   * all severity levels are forwarded to the logger.
+   *
+   * @example
+   * ```ts
+   * // Quick debugging
+   * const sdk = new StarkZap({ network: "mainnet", logging: { logger: console } });
+   *
+   * // Pino with level filter
+   * import pino from "pino";
+   * const sdk = new StarkZap({ network: "mainnet", logging: { logger: pino(), logLevel: "warn" } });
+   * ```
+   *
+   * @see {@link LoggerConfig}
+   */
+  logging?: LoggerConfig;
 }

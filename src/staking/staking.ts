@@ -1,5 +1,4 @@
 import {
-  type BigNumberish,
   type Call,
   Contract,
   type ProviderOrAccount,
@@ -24,6 +23,7 @@ import type { WalletInterface } from "@/wallet";
 import type { Tx } from "@/tx";
 import type { Pool, PoolMember } from "@/types/pool";
 import { groupBy } from "@/utils";
+import type { ClaimableStaking } from "@/staking/interface";
 
 const DEFAULT_FROM_POOL_TIMEOUT_MS = 20_000;
 
@@ -57,7 +57,7 @@ interface FromPoolOptions {
  * }
  * ```
  */
-export class Staking {
+export class Staking implements ClaimableStaking {
   private readonly pool: TypedContractV2<typeof POOL_ABI>;
   private readonly token: Token;
   private readonly provider: RpcProvider;
@@ -199,7 +199,7 @@ export class Staking {
    * ```
    */
   async getPosition(
-    walletOrAddress: WalletInterface | Address | BigNumberish
+    walletOrAddress: WalletInterface | Address
   ): Promise<PoolMember | null> {
     const walletAddress = resolveWalletAddress(walletOrAddress);
     const memberInfo = await this.pool.get_pool_member_info_v1(walletAddress);
@@ -683,13 +683,9 @@ export class Staking {
       providerOrAccount: provider,
     }).typedv2(STAKING_ABI);
 
-    const tokenAddresses = await stakingContract
-      .get_active_tokens()
-      .then((addresses) => {
-        return addresses.map((address) => {
-          return fromAddress(address);
-        });
-      });
+    const tokenAddresses = (await stakingContract.get_active_tokens()).map(
+      fromAddress
+    );
 
     return await getTokensFromAddresses(tokenAddresses, provider);
   }
@@ -727,28 +723,21 @@ export class Staking {
 
     const { pools } = await stakingContract.staker_pool_info(stakerAddress);
 
-    const tokenAddresses = pools.map((pool) => {
-      return fromAddress(pool.token_address);
-    });
-
+    const tokenAddresses = pools.map((pool) => fromAddress(pool.token_address));
     const tokens = await getTokensFromAddresses(tokenAddresses, provider);
     const tokensMap = groupBy(tokens, (token) => token.address);
-    return pools.flatMap((pool) => {
-      const poolAddress = fromAddress(pool.pool_contract);
-      const tokens = tokensMap.get(fromAddress(pool.token_address));
-      const token = tokens?.[0];
-      if (!token) {
-        return [];
-      }
 
-      return [
-        {
-          poolContract: poolAddress,
-          token: token,
+    return pools.reduce<Pool[]>((result, pool) => {
+      const token = tokensMap.get(fromAddress(pool.token_address))?.[0];
+      if (token) {
+        result.push({
+          poolContract: fromAddress(pool.pool_contract),
+          token,
           amount: Amount.fromRaw(pool.amount, token),
-        },
-      ];
-    });
+        });
+      }
+      return result;
+    }, []);
   }
 }
 

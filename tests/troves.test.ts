@@ -1,23 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Call } from "starknet";
-import { fromAddress, type ExecuteOptions } from "@/types";
+import type { RpcProvider } from "starknet";
+import { ChainId, fromAddress, type ExecuteOptions } from "@/types";
 import { Troves } from "@/troves";
-import type { Tx } from "@/tx";
+import { Tx } from "@/tx";
+import type { WalletInterface } from "@/wallet/interface";
 
 const MOCK_ADDRESS =
   "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 function createMockWallet() {
-  const execute = vi.fn<(...args: unknown[]) => Promise<Tx>>();
-  execute.mockResolvedValue({ hash: "0xmocktxhash" } as Tx);
+  const execute =
+    vi.fn<(calls: Call[], options?: ExecuteOptions) => Promise<Tx>>();
+  execute.mockResolvedValue(
+    new Tx("0xmocktxhash", {} as RpcProvider, ChainId.MAINNET)
+  );
 
   return {
     address: fromAddress(MOCK_ADDRESS),
-    execute: execute as (
-      calls: Call[],
-      options?: ExecuteOptions
-    ) => Promise<Tx>,
-  };
+    execute,
+  } satisfies Pick<WalletInterface, "address" | "execute">;
 }
 
 describe("Troves", () => {
@@ -60,7 +62,7 @@ describe("Troves", () => {
         json: () => Promise.resolve(strategiesResponse),
       });
 
-      const troves = new Troves(wallet as never, {
+      const troves = new Troves(wallet, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -81,6 +83,92 @@ describe("Troves", () => {
       );
     });
 
+    it("should accept discontinuationInfo.date = null", async () => {
+      const wallet = createMockWallet();
+      const fetcher = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            status: true,
+            lastUpdated: new Date().toISOString(),
+            source: "sdk",
+            strategies: [
+              {
+                id: "s1",
+                name: "S1",
+                apy: 0.05,
+                apySplit: { baseApy: 0.04, rewardsApy: 0.01 },
+                depositToken: [
+                  {
+                    symbol: "STRK",
+                    name: "Starknet",
+                    address: "0x123",
+                    decimals: 18,
+                  },
+                ],
+                leverage: 1,
+                contract: [{ name: "Vault", address: "0xabc" }],
+                tvlUsd: 1000000,
+                status: { number: 1, value: "active" },
+                riskFactor: 0.5,
+                isAudited: true,
+                assets: ["strk"],
+                protocols: ["evergreen"],
+                isRetired: false,
+                discontinuationInfo: { date: null },
+              },
+            ],
+          }),
+      });
+
+      const troves = new Troves(wallet, { fetcher: fetcher as typeof fetch });
+      await expect(troves.getStrategies()).resolves.toBeDefined();
+    });
+
+    it("should throw on invalid discontinuationInfo.date string", async () => {
+      const wallet = createMockWallet();
+      const fetcher = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            status: true,
+            lastUpdated: new Date().toISOString(),
+            source: "sdk",
+            strategies: [
+              {
+                id: "s1",
+                name: "S1",
+                apy: 0.05,
+                apySplit: { baseApy: 0.04, rewardsApy: 0.01 },
+                depositToken: [
+                  {
+                    symbol: "STRK",
+                    name: "Starknet",
+                    address: "0x123",
+                    decimals: 18,
+                  },
+                ],
+                leverage: 1,
+                contract: [{ name: "Vault", address: "0xabc" }],
+                tvlUsd: 1000000,
+                status: { number: 1, value: "active" },
+                riskFactor: 0.5,
+                isAudited: true,
+                assets: ["strk"],
+                protocols: ["evergreen"],
+                isRetired: false,
+                discontinuationInfo: { date: "not-a-date" },
+              },
+            ],
+          }),
+      });
+
+      const troves = new Troves(wallet, { fetcher: fetcher as typeof fetch });
+      await expect(troves.getStrategies()).rejects.toThrow(
+        'Troves API returned invalid discontinuationInfo.date for strategy "s1"'
+      );
+    });
+
     it("should append no_cache=true when requested", async () => {
       const wallet = createMockWallet();
       const fetcher = vi.fn().mockResolvedValue({
@@ -94,7 +182,7 @@ describe("Troves", () => {
           }),
       });
 
-      const troves = new Troves(wallet as never, {
+      const troves = new Troves(wallet, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -114,7 +202,7 @@ describe("Troves", () => {
         statusText: "Internal Server Error",
       });
 
-      const troves = new Troves(wallet as never, {
+      const troves = new Troves(wallet, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -137,7 +225,7 @@ describe("Troves", () => {
         json: () => Promise.resolve(statsResponse),
       });
 
-      const troves = new Troves(wallet as never, {
+      const troves = new Troves(wallet, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -187,7 +275,7 @@ describe("Troves", () => {
         json: () => Promise.resolve(depositCallsResponse),
       });
 
-      const troves = new Troves(wallet as never, {
+      const troves = new Troves(wallet, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -222,6 +310,58 @@ describe("Troves", () => {
       });
     });
 
+    it("should forward amount2Raw and address override", async () => {
+      const wallet = createMockWallet();
+      const fetcher = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            success: true,
+            results: [
+              {
+                tokenInfo: {
+                  symbol: "STRK",
+                  name: "Starknet",
+                  address: "0x123",
+                  decimals: 18,
+                },
+                calls: [
+                  {
+                    contractAddress: "0xabc",
+                    entrypoint: "approve",
+                    calldata: ["0xdef", "1"],
+                  },
+                ],
+              },
+            ],
+            strategyId: "s1",
+            isDeposit: true,
+          }),
+      });
+
+      const troves = new Troves(wallet, { fetcher: fetcher as typeof fetch });
+      await troves.populateDepositCalls({
+        strategyId: "s1",
+        amountRaw: "1",
+        amount2Raw: "2",
+        address: "0xdead",
+      });
+
+      expect(fetcher).toHaveBeenCalledWith(
+        "https://app.troves.fi/api/deposits/calls",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            strategyId: "s1",
+            amountRaw: "1",
+            amount2Raw: "2",
+            isDeposit: true,
+            address: "0xdead",
+          }),
+        })
+      );
+    });
+
     it("should throw when API returns no calls", async () => {
       const wallet = createMockWallet();
       const fetcher = vi.fn().mockResolvedValue({
@@ -235,7 +375,7 @@ describe("Troves", () => {
           }),
       });
 
-      const troves = new Troves(wallet as never, {
+      const troves = new Troves(wallet, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -272,7 +412,7 @@ describe("Troves", () => {
           }),
       });
 
-      const troves = new Troves(wallet as never, {
+      const troves = new Troves(wallet, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -318,7 +458,7 @@ describe("Troves", () => {
         json: () => Promise.resolve(withdrawCallsResponse),
       });
 
-      const troves = new Troves(wallet as never, {
+      const troves = new Troves(wallet, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -366,7 +506,7 @@ describe("Troves", () => {
           }),
       });
 
-      const troves = new Troves(wallet as never, {
+      const troves = new Troves(wallet, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -417,7 +557,7 @@ describe("Troves", () => {
         json: () => Promise.resolve(depositCallsResponse),
       });
 
-      const troves = new Troves(wallet as never, {
+      const troves = new Troves(wallet, {
         fetcher: fetcher as typeof fetch,
       });
 
@@ -470,7 +610,7 @@ describe("Troves", () => {
         json: () => Promise.resolve(withdrawCallsResponse),
       });
 
-      const troves = new Troves(wallet as never, {
+      const troves = new Troves(wallet, {
         fetcher: fetcher as typeof fetch,
       });
 

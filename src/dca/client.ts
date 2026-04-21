@@ -13,6 +13,7 @@ import type {
   DcaProviderContext,
   PreparedDcaAction,
 } from "@/dca/interface";
+import { assertPreparedCalls } from "@/providers/assert";
 import { AvnuDcaProvider } from "@/dca/avnu";
 import {
   assertDcaContext,
@@ -22,49 +23,36 @@ import {
   resolveDcaSource,
 } from "@/dca/utils";
 import { resolveSwapInput } from "@/swap/utils";
+import { ProviderRegistry } from "@/providers/registry";
 
 export class DcaClient implements DcaClientInterface {
   private readonly context: DcaExecutionContext;
-  private readonly providers: Map<string, DcaProvider>;
-  private defaultProviderId: string | null = null;
+  private readonly registry: ProviderRegistry<DcaProvider>;
 
   constructor(context: DcaExecutionContext, defaultProvider?: DcaProvider) {
     this.context = context;
-    this.providers = new Map();
-    this.registerProvider(defaultProvider ?? new AvnuDcaProvider(), true);
+    this.registry = new ProviderRegistry("DCA");
+    this.registry.register(defaultProvider ?? new AvnuDcaProvider(), true);
   }
 
   registerProvider(provider: DcaProvider, makeDefault = false): void {
-    this.providers.set(provider.id, provider);
-    if (makeDefault || this.defaultProviderId == null) {
-      this.defaultProviderId = provider.id;
-    }
+    this.registry.register(provider, makeDefault);
   }
 
   setDefaultProvider(providerId: string): void {
-    this.getDcaProvider(providerId);
-    this.defaultProviderId = providerId;
+    this.registry.setDefault(providerId);
   }
 
   getDcaProvider(providerId: string): DcaProvider {
-    const provider = this.providers.get(providerId);
-    if (!provider) {
-      throw new Error(
-        `Unknown DCA provider "${providerId}". Registered providers: ${this.listProviders().join(", ")}`
-      );
-    }
-    return provider;
+    return this.registry.get(providerId);
   }
 
   getDefaultDcaProvider(): DcaProvider {
-    if (!this.defaultProviderId) {
-      throw new Error("No default DCA provider configured");
-    }
-    return this.getDcaProvider(this.defaultProviderId);
+    return this.registry.getDefault();
   }
 
   listProviders(): string[] {
-    return Array.from(this.providers.keys());
+    return this.registry.list();
   }
 
   async getOrders(request: DcaOrdersInput = {}): Promise<DcaOrdersPage> {
@@ -82,7 +70,7 @@ export class DcaClient implements DcaClientInterface {
       hydrateDcaCreateInput(request, this.context.address)
     );
 
-    this.assertPreparedCalls(prepared, provider.id);
+    assertPreparedCalls(prepared.calls, "DCA", provider.id);
     return prepared;
   }
 
@@ -98,7 +86,7 @@ export class DcaClient implements DcaClientInterface {
       hydrateDcaCancelInput(request)
     );
 
-    this.assertPreparedCalls(prepared, provider.id);
+    assertPreparedCalls(prepared.calls, "DCA", provider.id);
     return prepared;
   }
 
@@ -147,15 +135,5 @@ export class DcaClient implements DcaClientInterface {
       rpcProvider: this.context.getProvider(),
       walletAddress: this.context.address,
     };
-  }
-
-  private assertPreparedCalls(
-    prepared: PreparedDcaAction,
-    providerId: string
-  ): void {
-    if (prepared.calls.length > 0) {
-      return;
-    }
-    throw new Error(`DCA provider "${providerId}" returned no calls`);
   }
 }
